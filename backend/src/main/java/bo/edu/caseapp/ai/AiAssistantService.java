@@ -38,6 +38,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +56,8 @@ public class AiAssistantService {
   private final bo.edu.caseapp.uml.relational.SqlDdlParserService sqlDdlParserService;
   private final bo.edu.caseapp.uml.collab.UmlWebSocketHandler wsHandler;
   private final LlmProvider llmProvider;
+  @Autowired(required = false)
+  private AiOrchestrationService aiOrchestrationService;
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   @org.springframework.beans.factory.annotation.Autowired
@@ -117,7 +120,7 @@ public class AiAssistantService {
         .orElseThrow(() -> new NotFoundException("Usuario no encontrado."));
 
     if (!"LLM_CANONICAL".equals(request.resolvedSource()) && !looksLikeSqlDdl(request.command())) {
-      List<String> interpretedCommands = interpretCommandWithGroq(diagramId, email, request.command());
+      List<String> interpretedCommands = interpretCommandWithGroq(projectId, diagramId, email, request.command());
       if (interpretedCommands != null && !interpretedCommands.isEmpty()) {
         CommandResponse lastResponse = null;
         for (String interpretedCommand : interpretedCommands) {
@@ -510,17 +513,15 @@ public class AiAssistantService {
     String q = request.question().trim();
     if (llmProvider != null && llmProvider.isConfigured()) {
       try {
-        String context = buildCommandContext(diagramId, email);
         String systemPrompt = "Eres el asistente y consultor experto en ingeniería de software y modelado UML de la herramienta CASE colaborativa.\n"
             + "Responde en español de forma concisa, técnica y didáctica. Si el usuario pregunta sobre conceptos UML (asociación, herencia, composición, etc.), explícalos claramente.\n"
             + "Si pregunta sobre el diseño del diagrama actual, analiza el contexto provisto y sugiere mejoras precisas.\n"
-            + "Termina siempre con una sugerencia de comando accionable que el usuario pueda escribir o dictar en el editor.\n\n"
-            + "CONTEXTO DEL DIAGRAMA ACTUAL:\n" + context;
+            + "Termina siempre con una sugerencia de comando accionable que el usuario pueda escribir o dictar en el editor.";
 
-        LlmResponse resp = llmProvider.chat(List.of(
-            LlmMessage.system(systemPrompt),
-            LlmMessage.user(q)
-        ), 800, 0.3);
+        LlmResponse resp = aiOrchestrationService != null
+            ? aiOrchestrationService.generate(email, projectId, diagramId, AiOperation.TECHNICAL_CHAT,
+                systemPrompt, List.of(LlmMessage.user(q)), 800, 0.3)
+            : llmProvider.chat(List.of(LlmMessage.system(systemPrompt), LlmMessage.user(q)), 800, 0.3);
 
         if (resp.success() && resp.content() != null && !resp.content().isBlank()) {
           String full = resp.content().trim();
@@ -596,7 +597,7 @@ public class AiAssistantService {
       return analyzeWithLocalFallback(imageData, request.promptHint(), "El proveedor de IA no está configurado.");
     }
 
-    ImageModel model = analyzeWithGroq(imageData, mimeType, request.promptHint());
+    ImageModel model = analyzeWithGroq(projectId, diagramId, email, imageData, mimeType, request.promptHint());
     return new ImageAnalysisResponse(model, model.warnings(), "GROQ");
   }
 
@@ -732,7 +733,7 @@ public class AiAssistantService {
     return source + "|" + target + "|" + type;
   }
 
-  private ImageModel analyzeWithGroq(String imageBase64, String mimeType, String hint) {
+  private ImageModel analyzeWithGroq(UUID projectId, UUID diagramId, String email, String imageBase64, String mimeType, String hint) {
     String unifiedPrompt = """
         Perform an exhaustive reverse-engineering of this UML class diagram image into valid JSON:
         Step 1: Extract EVERY visible class, interface, abstract class, and enumeration with its name, attributes, and methods.
@@ -771,7 +772,10 @@ public class AiAssistantService {
         """ + (hint == null || hint.isBlank() ? "" : "\nDomain hint provided by developer: " + hint.trim());
 
     try {
-      LlmResponse response = llmProvider.analyzeImage(unifiedPrompt, imageBase64, mimeType, 1500);
+      LlmResponse response = aiOrchestrationService != null
+          ? aiOrchestrationService.analyzeImage(email, projectId, diagramId, AiOperation.IMAGE_ANALYSIS,
+              unifiedPrompt, imageBase64, mimeType, 1500)
+          : llmProvider.analyzeImage(unifiedPrompt, imageBase64, mimeType, 1500);
       if (response.success() && response.content() != null && !response.content().isBlank()) {
         String jsonText = response.content().trim();
         if (jsonText.startsWith("```")) {
@@ -833,7 +837,7 @@ public class AiAssistantService {
     // 1. Si GroqCloud está configurado, priorizar visión multimodal de IA en backend
     if (llmProvider != null && llmProvider.isConfigured()) {
       log.info("Iniciando análisis multimodal con GroqCloud Vision en backend...");
-      tryGroqVision(request.imageBase64(), hint, detectedClasses, detectedRelations);
+      tryGroqVision(projectId, diagramId, email, request.imageBase64(), hint, detectedClasses, detectedRelations);
     }
 
     // 2. Si no se detectaron clases con Groq, usar lo detectado por el cliente
@@ -1042,7 +1046,8 @@ public class AiAssistantService {
     return new ImageReconstructionResponse(true, message, detectedClasses.size(), relsCreated, updatedDiagram);
   }
 
-  private boolean tryGroqVision(String base64Image, String hint, List<DetectedClass> outClasses, List<DetectedRelation> outRelations) {
+  private boolean tryGroqVision(UUID projectId, UUID diagramId, String email, String base64Image, String hint,
+      List<DetectedClass> outClasses, List<DetectedRelation> outRelations) {
     if (llmProvider == null || !llmProvider.isConfigured() || base64Image == null || base64Image.isBlank()) return false;
     try {
       String cleanBase64 = base64Image.contains(",")
@@ -1059,7 +1064,10 @@ public class AiAssistantService {
           Return ONLY valid JSON matching this format: {"classes": [...], "relations": [...]}
           """ + (hint == null || hint.isBlank() ? "" : "\nDomain context: " + hint.trim());
 
-      LlmResponse resp = llmProvider.analyzeImage(prompt, cleanBase64, mimeType, 1500);
+      LlmResponse resp = aiOrchestrationService != null
+          ? aiOrchestrationService.analyzeImage(email, projectId, diagramId, AiOperation.IMAGE_RECONSTRUCTION,
+              prompt, cleanBase64, mimeType, 1500)
+          : llmProvider.analyzeImage(prompt, cleanBase64, mimeType, 1500);
       if (resp.success() && resp.content() != null && !resp.content().isBlank()) {
         String textResp = resp.content().trim();
         int jsonStart = textResp.indexOf('{');
@@ -1668,10 +1676,9 @@ public class AiAssistantService {
   }
 
   /** Interpreta lenguaje natural de CU10 con GroqCloud (Qwen); el parser determinista sigue ejecutando las operaciones UML. */
-  private List<String> interpretCommandWithGroq(UUID diagramId, String email, String userText) {
+  private List<String> interpretCommandWithGroq(UUID projectId, UUID diagramId, String email, String userText) {
     if (llmProvider == null || !llmProvider.isConfigured() || userText == null || userText.isBlank()) return null;
     try {
-      String context = buildCommandContext(diagramId, email);
       String systemPrompt = """
           Eres el intérprete de lenguaje natural de un editor UML. Tu función es traducir las intenciones del usuario en comandos UML estructurados.
           No ejecutes operaciones por tu cuenta y no devuelvas prosa, explicaciones ni bloques de código markdown.
@@ -1692,12 +1699,10 @@ public class AiAssistantService {
           Si la intención no es una operación UML permitida, devuelve {"operaciones":[]}.
           """;
 
-      String userPrompt = "CONTEXTO DEL DIAGRAMA:\n" + context + "\n\nINSTRUCCIÓN DEL USUARIO:\n" + userText.trim();
-
-      LlmResponse llmResp = llmProvider.chat(List.of(
-          LlmMessage.system(systemPrompt),
-          LlmMessage.user(userPrompt)
-      ), 800, 0.1);
+      LlmResponse llmResp = aiOrchestrationService != null
+          ? aiOrchestrationService.generate(email, projectId, diagramId, AiOperation.UML_COMMAND,
+              systemPrompt, List.of(LlmMessage.user("INSTRUCCIÓN DEL USUARIO:\n" + userText.trim())), 800, 0.1)
+          : llmProvider.chat(List.of(LlmMessage.system(systemPrompt), LlmMessage.user(userText.trim())), 800, 0.1);
 
       if (!llmResp.success() || llmResp.content() == null || llmResp.content().isBlank()) {
         log.warn("LlmProvider devolvió respuesta vacía o fallida en CU10: {}", llmResp.errorMessage());
@@ -1721,36 +1726,6 @@ public class AiAssistantService {
       log.warn("No se pudo interpretar el comando CU10 con Groq; se usará el parser determinista local: {}", e.getMessage());
       return null;
     }
-  }
-
-  private String buildCommandContext(UUID diagramId, String email) {
-    StringBuilder context = new StringBuilder();
-    context.append("CLASES:\n");
-    List<ElementoUML> elements = elementRepo.findByDiagramaId(diagramId);
-    if (elements != null) {
-      for (ElementoUML element : elements) {
-        context.append("- ").append(element.getNombre()).append(" (" ).append(element.getTipoElemento()).append(")");
-        context.append(" atributos=").append(element.getPropiedadesJson()).append("\n");
-      }
-    }
-    context.append("RELACIONES:\n");
-    List<RelacionUML> relations = relationRepo.findByDiagramaId(diagramId);
-    if (relations != null) {
-      for (RelacionUML relation : relations) {
-        context.append("- ").append(relation.getElementoOrigen().getNombre()).append(" -> ")
-            .append(relation.getElementoDestino().getNombre()).append(", ")
-            .append(relation.getTipoRelacion()).append(", ")
-            .append(relation.getMultiplicidadOrigen()).append(" a ")
-            .append(relation.getMultiplicidadDestino()).append("\n");
-      }
-    }
-    List<InteraccionIa> interactions = iaRepo.findByDiagramaIdAndUsuarioEmailIgnoreCaseOrderByFechaDesc(diagramId, email);
-    if (interactions != null && !interactions.isEmpty()) {
-      context.append("ÚLTIMAS OPERACIONES:\n");
-      interactions.stream().limit(5).forEach(i -> context.append("- ").append(i.getEntradaUsuario()).append(" => ")
-          .append(i.getAccionJson()).append("\n"));
-    }
-    return context.toString();
   }
 
   private String structuredActionToCommand(JsonNode operation) {

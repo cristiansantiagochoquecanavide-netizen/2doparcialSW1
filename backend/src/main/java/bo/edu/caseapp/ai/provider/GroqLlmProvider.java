@@ -126,8 +126,8 @@ public class GroqLlmProvider implements LlmProvider {
 
       return executePost(payload.toString(), key);
     } catch (Exception e) {
-      log.error("Excepción inesperada al invocar chat en Groq: {}", e.getMessage());
-      return LlmResponse.failure("Error interno al invocar Groq: " + e.getMessage(), 500);
+      log.error("Excepción inesperada al invocar chat en Groq ({})", e.getClass().getSimpleName());
+      return LlmResponse.failure("Error interno al invocar Groq.", 500);
     }
   }
 
@@ -167,8 +167,8 @@ public class GroqLlmProvider implements LlmProvider {
 
       return executePost(payload.toString(), key);
     } catch (Exception e) {
-      log.error("Excepción inesperada al analizar imagen en Groq: {}", e.getMessage());
-      return LlmResponse.failure("Error interno al analizar imagen en Groq: " + e.getMessage(), 500);
+      log.error("Excepción inesperada al analizar imagen en Groq ({})", e.getClass().getSimpleName());
+      return LlmResponse.failure("Error interno al analizar imagen en Groq.", 500);
     }
   }
 
@@ -200,6 +200,11 @@ public class GroqLlmProvider implements LlmProvider {
           }
         }
 
+        if (text == null || text.isBlank()) {
+          log.warn("GroqCloud devolvió una respuesta vacía o sin choices (HTTP 200) tras {}ms", latency);
+          return LlmResponse.failure("GroqCloud devolvió una respuesta vacía o malformada.", 502);
+        }
+
         int promptTokens = 0;
         int completionTokens = 0;
         JsonNode usage = root.get("usage");
@@ -221,17 +226,16 @@ public class GroqLlmProvider implements LlmProvider {
         log.error("GroqCloud error de autenticación (HTTP {}). Verifique GROQ_API_KEY.", statusCode);
         return LlmResponse.failure("Credencial inválida o no autorizada para GroqCloud (HTTP " + statusCode + ").", statusCode);
       } else {
-        String errDetail = extractErrorMessage(response.body());
-        log.warn("GroqCloud respondió HTTP {}: {}", statusCode, errDetail);
-        return LlmResponse.failure("GroqCloud respondió error HTTP " + statusCode + ": " + errDetail, statusCode);
+        log.warn("GroqCloud respondió HTTP {}", statusCode);
+        return LlmResponse.failure("GroqCloud respondió error HTTP " + statusCode + ".", statusCode);
       }
     } catch (HttpTimeoutException e) {
       long latency = System.currentTimeMillis() - startTime;
-      log.error("Timeout al conectar con GroqCloud tras {}ms: {}", latency, e.getMessage());
+      log.warn("Timeout al conectar con GroqCloud tras {}ms", latency);
       return LlmResponse.failure("Tiempo de espera agotado al conectar con GroqCloud (" + timeoutSeconds + "s).", 504);
     } catch (IOException e) {
-      log.error("Error de E/S al conectar con GroqCloud: {}", e.getMessage());
-      return LlmResponse.failure("Error de comunicación de red con GroqCloud: " + e.getMessage(), 503);
+      log.warn("Error de E/S al conectar con GroqCloud ({}) tras {}ms", e.getClass().getSimpleName(), System.currentTimeMillis() - startTime);
+      return LlmResponse.failure("Error de comunicación de red con GroqCloud.", 503);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       return LlmResponse.failure("Operación interrumpida con GroqCloud.", 500);
@@ -247,19 +251,4 @@ public class GroqLlmProvider implements LlmProvider {
     return input.trim();
   }
 
-  private String extractErrorMessage(String responseBody) {
-    if (responseBody == null || responseBody.isBlank()) return "Sin detalles.";
-    try {
-      JsonNode node = objectMapper.readTree(responseBody);
-      if (node.has("error")) {
-        JsonNode err = node.get("error");
-        if (err.has("message")) {
-          return err.get("message").asText();
-        }
-      }
-      return responseBody.length() > 200 ? responseBody.substring(0, 200) + "..." : responseBody;
-    } catch (Exception ignored) {
-      return responseBody.length() > 200 ? responseBody.substring(0, 200) + "..." : responseBody;
-    }
-  }
 }

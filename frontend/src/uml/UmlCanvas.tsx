@@ -402,7 +402,7 @@ type Props = {
   project: { id: string; name: string; role: Role }
   auth: { token: string; name: string; email: string }
   onError: (e: unknown) => void
-  members?: { id: string; name: string; role: string }[]
+  members?: { id: string; userId: string; name: string; email: string; role: string }[]
   onManageMembers?: () => void
   onBack?: () => void
 }
@@ -1858,6 +1858,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   return (
     <>
     <WorkspaceChrome
+      projectId={project.id} token={auth.token}
       projectName={project.name} role={project.role} diagram={diagram} elements={elementsRaw} relations={relationsRaw}
       selectedElement={selectedElement} selectedRelation={selectedRelation} members={members} savingStatus={savingStatus}
       currentUser={{ name: auth.name, email: auth.email, role: project.role }}

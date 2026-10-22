@@ -13,7 +13,8 @@ import {
   SparklesIcon,
   ChatIcon
 } from './icons'
-import { TeamCollaborationPanel } from './TeamCollaborationPanel'
+import { LiveTeamChatPanel } from './LiveTeamChatPanel'
+import { AgentSpeechControls, AgentSpeechProvider } from './AgentSpeechUI'
 import './team-collaboration.css'
 
 const tools: { label: string; icon: string; type?: TipoElementoUML; relation?: TipoRelacionUML }[] = [
@@ -30,9 +31,10 @@ const tools: { label: string; icon: string; type?: TipoElementoUML; relation?: T
 ]
 
 type Props = {
+  projectId: string; token: string
   projectName: string; role: string; diagram: DiagramSummary | null; elements: ElementDetail[]; relations: RelationDetail[]
-  selectedElement: ElementDetail | null; selectedRelation: RelationDetail | null; members: { id: string; name: string; role: string }[]
-  currentUser?: { name: string; email: string; role: string }
+  selectedElement: ElementDetail | null; selectedRelation: RelationDetail | null; members: { id: string; userId: string; name: string; email: string; role: string }[]
+  currentUser: { name: string; email: string; role: string }
   savingStatus: string; online: boolean; syncing: boolean; wsConnected: boolean; queueCount: number; readOnly: boolean
   onBack?: () => void; onManageMembers?: () => void; onCreate: (type: TipoElementoUML) => void
   onImageUpload: (file: File) => void
@@ -44,6 +46,10 @@ type Props = {
 }
 
 export function WorkspaceChrome(p: Props) {
+  return <AgentSpeechProvider projectId={p.projectId} userKey={p.currentUser.email.toLowerCase()} sessionKey={p.token}><WorkspaceChromeContent {...p} /></AgentSpeechProvider>
+}
+
+function WorkspaceChromeContent(p: Props) {
   const [activeTool, setActiveTool] = useState('Selección')
   const [relationType, setRelationType] = useState<TipoRelacionUML>('ASOCIACION')
   const [imageName, setImageName] = useState('')
@@ -290,15 +296,15 @@ export function WorkspaceChrome(p: Props) {
             </div>
           </main>
 
-          {!isRightPanelCollapsed && (
-            <>
+          <>
               <div
                 className={`panel-resizer ${isResizingRight ? 'dragging' : ''}`}
+                style={{ display: isRightPanelCollapsed ? 'none' : undefined }}
                 onMouseDown={() => setIsResizingRight(true)}
                 title="Arrastrar para ajustar ancho del panel derecho"
               />
 
-              <div className="right-panel-container" style={{ width: effectiveRightWidth }}>
+              <div className="right-panel-container" style={{ width: effectiveRightWidth, display: isRightPanelCollapsed ? 'none' : undefined }}>
                 <div className="right-panel-tabbar">
                   <button
                     type="button"
@@ -327,18 +333,23 @@ export function WorkspaceChrome(p: Props) {
                   </button>
                 </div>
 
-                {rightPanelMode === 'team' ? (
-                  <TeamCollaborationPanel
+                <div className="team-panel-host" hidden={rightPanelMode !== 'team'}>
+                  <LiveTeamChatPanel
+                    projectId={p.projectId}
+                    diagramId={p.diagram?.id ?? null}
                     projectName={p.projectName}
                     diagramName={p.diagram?.nombre ?? 'Diagrama UML'}
-                    members={p.members.map(m => ({ ...m, email: (m as any).email ?? `${m.name.toLowerCase().replace(/\s+/g, '')}@caseapp.edu.bo` }))}
-                    currentUser={p.currentUser ?? { name: 'Usuario', email: 'usuario@caseapp.edu.bo', role: p.role }}
+                    token={p.token}
+                    members={p.members}
+                    currentUser={p.currentUser}
                     isWide={isWideTeam}
+                    visible={rightPanelMode === 'team' && !isRightPanelCollapsed}
                     onToggleWide={() => setIsWideTeam(!isWideTeam)}
                     onClose={() => setIsRightPanelCollapsed(true)}
                     onSwitchToInspector={() => setRightPanelMode('inspector')}
                   />
-                ) : (
+                </div>
+                {rightPanelMode === 'inspector' && (
                   <aside className="properties-panel">
                     <div className="panel-heading">
                       <span className="eyebrow">INSPECTOR</span>
@@ -390,13 +401,13 @@ export function WorkspaceChrome(p: Props) {
                   </aside>
                 )}
               </div>
-            </>
-          )}
+          </>
         </div>
       )
     })()}
 
     <footer className="workspace-footer">
+      <AgentSpeechControls />
       <span className={p.online ? 'footer-good' : 'footer-warn'}>● {p.online ? 'Conexión disponible' : 'Sin conexión'}</span>
       <span>{p.wsConnected ? 'Colaboración en vivo' : 'Presencia en tiempo real'}</span>
       <span>{p.members.length} colaboradores</span>

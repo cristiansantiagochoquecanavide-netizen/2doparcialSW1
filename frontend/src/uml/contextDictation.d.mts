@@ -1,0 +1,3 @@
+export type ContextRecognizer = { start(): void; stop(): void; abort(): void; lang: string; interimResults: boolean; continuous: boolean; onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: ((event: { error: string }) => void) | null }
+export type ContextRecognitionConstructor = new () => ContextRecognizer
+export function createContextDictation(Recognition: ContextRecognitionConstructor | undefined, callbacks: { onTranscript(value: string): void; onState(listening: boolean): void; onError(error: string): void }): { start(): void; stop(): void; dispose(): void }

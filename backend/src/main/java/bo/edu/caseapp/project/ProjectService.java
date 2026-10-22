@@ -3,6 +3,8 @@ package bo.edu.caseapp.project;
 import bo.edu.caseapp.error.*;
 import bo.edu.caseapp.project.ProjectRequests.*;
 import bo.edu.caseapp.project.ProjectResponses.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import bo.edu.caseapp.user.User;
 import bo.edu.caseapp.user.UserRepository;
 import java.util.*;
@@ -13,7 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 public class ProjectService {
   private final ProjectRepository projects; private final ProjectMemberRepository members; private final UserRepository users;
-  public ProjectService(ProjectRepository projects, ProjectMemberRepository members, UserRepository users) { this.projects = projects; this.members = members; this.users = users; }
+  private final ApplicationEventPublisher events;
+  @Autowired
+  public ProjectService(ProjectRepository projects, ProjectMemberRepository members, UserRepository users, ApplicationEventPublisher events) { this.projects = projects; this.members = members; this.users = users; this.events = events; }
+  public ProjectService(ProjectRepository projects, ProjectMemberRepository members, UserRepository users) { this(projects, members, users, event -> {}); }
   @Transactional(readOnly = true)
   public List<ProjectSummary> list(String email) {
     User user = user(email); return members.findByUserId(user.getId()).stream().map(m -> new ProjectSummary(m.getProject().getId(), m.getProject().getName(), m.getProject().getDescription(), m.getRole(), m.getProject().getCreatedAt())).toList();
@@ -27,7 +32,7 @@ public class ProjectService {
   public ProjectDetail update(UUID projectId, String email, Update request) {
     ProjectMember member = membership(projectId, email); requireCanEdit(member); member.getProject().update(request.name().trim(), clean(request.description())); return detail(member.getProject(), member.getRole());
   }
-  public void delete(UUID projectId, String email) { ProjectMember member = membership(projectId, email); requireOwner(member); projects.delete(member.getProject()); }
+  public void delete(UUID projectId, String email) { ProjectMember member = membership(projectId, email); requireOwner(member); events.publishEvent(new ProjectAccessRevokedEvent(projectId, null)); projects.delete(member.getProject()); }
   @Transactional(readOnly = true)
   public List<Member> listMembers(UUID projectId, String email) { membership(projectId, email); return members.findByProjectId(projectId).stream().map(this::member).toList(); }
   public Member addMember(UUID projectId, String email, AddMember request) {
@@ -44,7 +49,9 @@ public class ProjectService {
   }
   public void removeMember(UUID projectId, UUID memberId, String email) {
     requireOwner(membership(projectId, email)); ProjectMember target = memberForProject(projectId, memberId);
-    if (target.getRole() == ProjectRole.PROPIETARIO) throw new BadRequestException("No se puede eliminar al propietario."); members.delete(target);
+    if (target.getRole() == ProjectRole.PROPIETARIO) throw new BadRequestException("No se puede eliminar al propietario.");
+    events.publishEvent(new ProjectAccessRevokedEvent(projectId, target.getUser().getEmail()));
+    members.delete(target);
   }
   public ProjectMember requireAccess(UUID projectId, String email) { return membership(projectId, email); }
   public ProjectMember requireCanEdit(UUID projectId, String email) { ProjectMember member = membership(projectId, email); requireCanEdit(member); return member; }

@@ -87,6 +87,67 @@ class JwtWebSocketHandshakeInterceptorTest {
   }
 
   @Test
+  void projectMemberCanSubscribeToProjectChatWithoutDiagramLookup() {
+    when(jwtService.extractEmail("signed-token")).thenReturn("member@example.com");
+    Map<String, Object> attributes = new HashMap<>();
+    ServerHttpRequest request = requestForPath("/ws/projects/" + projectId + "/chat", "signed-token");
+
+    boolean accepted = interceptor.beforeHandshake(request, mock(ServerHttpResponse.class), handler, attributes);
+
+    assertTrue(accepted);
+    verify(projectService).requireAccess(projectId, "member@example.com");
+    verifyNoInteractions(diagrams);
+    assertTrue(attributes.get("authorizedProjectId").equals(projectId));
+    assertTrue(attributes.get("authorizedScopeType").equals("PROJECT_CHAT"));
+  }
+
+  @Test
+  void projectOutsiderCannotSubscribeToProjectChat() {
+    when(jwtService.extractEmail("signed-token")).thenReturn("outsider@example.com");
+    doThrow(new ForbiddenException("No tienes acceso a este proyecto."))
+        .when(projectService).requireAccess(projectId, "outsider@example.com");
+    ServerHttpResponse response = mock(ServerHttpResponse.class);
+
+    boolean accepted = interceptor.beforeHandshake(
+        requestForPath("/ws/projects/" + projectId + "/chat", "signed-token"), response, handler, new HashMap<>());
+
+    assertFalse(accepted);
+    verify(response).setStatusCode(HttpStatus.FORBIDDEN);
+    verifyNoInteractions(diagrams);
+  }
+
+  @Test
+  void projectMemberCanSubscribeToProjectVoiceWithoutDiagramLookup() {
+    when(jwtService.extractEmail("signed-token")).thenReturn("member@example.com");
+    when(jwtService.extractExpiration("signed-token")).thenReturn(java.time.Instant.now().plusSeconds(300));
+    Map<String, Object> attributes = new HashMap<>();
+    ServerHttpRequest request = requestForPath("/ws/projects/" + projectId + "/voice", "signed-token");
+
+    boolean accepted = interceptor.beforeHandshake(request, mock(ServerHttpResponse.class), handler, attributes);
+
+    assertTrue(accepted);
+    verify(projectService).requireAccess(projectId, "member@example.com");
+    verifyNoInteractions(diagrams);
+    assertTrue(attributes.get("authorizedProjectId").equals(projectId));
+    assertTrue(attributes.get("authorizedScopeType").equals("PROJECT_VOICE"));
+  }
+
+  @Test
+  void projectOutsiderCannotSubscribeToProjectVoice() {
+    when(jwtService.extractEmail("signed-token")).thenReturn("outsider@example.com");
+    doThrow(new ForbiddenException("No tienes acceso a este proyecto."))
+        .when(projectService).requireAccess(projectId, "outsider@example.com");
+    ServerHttpResponse response = mock(ServerHttpResponse.class);
+
+    boolean accepted = interceptor.beforeHandshake(
+        requestForPath("/ws/projects/" + projectId + "/voice", "signed-token"), response, handler, new HashMap<>());
+
+    assertFalse(accepted);
+    verify(response).setStatusCode(HttpStatus.FORBIDDEN);
+    verifyNoInteractions(diagrams);
+  }
+
+  @Test
   void invalidJwtCannotSubscribe() {
     when(jwtService.extractEmail("invalid-token")).thenThrow(new IllegalArgumentException("invalid"));
     ServerHttpResponse response = mock(ServerHttpResponse.class);
@@ -103,6 +164,10 @@ class JwtWebSocketHandshakeInterceptorTest {
   }
 
   private ServerHttpRequest requestWithToken(String token) {
+    return requestForPath("/ws/diagrams/" + diagramId, token);
+  }
+
+  private ServerHttpRequest requestForPath(String path, String token) {
     ServerHttpRequest request = mock(ServerHttpRequest.class);
     HttpHeaders headers = new HttpHeaders();
     headers.setOrigin("http://localhost:5173");
@@ -110,7 +175,7 @@ class JwtWebSocketHandshakeInterceptorTest {
         ? "case-events-v1"
         : "case-events-v1, bearer." + token);
     when(request.getHeaders()).thenReturn(headers);
-    when(request.getURI()).thenReturn(java.net.URI.create("ws://localhost/ws/diagrams/" + diagramId));
+    when(request.getURI()).thenReturn(java.net.URI.create("ws://localhost" + path));
     return request;
   }
 }

@@ -23,7 +23,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Service
 @Transactional
 public class UmlService {
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private bo.edu.caseapp.ai.AiAnalysisQueue aiAnalysisQueue;
   private enum SaveMode { CREATE, UPDATE }
+  private record Batch(UUID diagramId, long baseRevision, long revision) { }
+  private final ThreadLocal<Batch> activeBatch = new ThreadLocal<>();
 
   private final DiagramaClaseRepository diagrams;
   private final ElementoUMLRepository elements;
@@ -64,6 +68,7 @@ public class UmlService {
   }
 
   public void notifyCollabAfterCommit(UUID diagramId, String eventType, Long revision) {
+    if (activeBatch.get() != null && activeBatch.get().diagramId().equals(diagramId)) return;
     if (collabHandler == null || diagramId == null) return;
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -86,6 +91,14 @@ public class UmlService {
   }
 
   public long reserveNextRevision(UUID diagramId, Long expectedRevision) {
+    Batch batch = activeBatch.get();
+    if (batch != null) {
+      if (!batch.diagramId().equals(diagramId) || (expectedRevision != null
+          && expectedRevision != batch.baseRevision() && expectedRevision != batch.revision()))
+        throw new ConflictException("La operación no pertenece al lote UML autorizado.");
+      return batch.revision();
+    }
+    if (aiAnalysisQueue != null) aiAnalysisQueue.beforeMutation(diagramId);
     if (expectedRevision != null) {
       int updated = diagrams.incrementRevisionIfMatches(diagramId, expectedRevision);
       if (updated == 0) {
@@ -98,6 +111,22 @@ public class UmlService {
       diagrams.incrementRevisionUnconditional(diagramId);
       return diagrams.findRevisionById(diagramId).orElse(1L);
     }
+  }
+
+  /** One CAS and one post-commit event; all writes still use the normal UML business methods. */
+  public <T> T mutateBatch(UUID projectId, UUID diagramId, String email, long expectedRevision,
+      java.util.function.Supplier<T> operations) {
+    if (activeBatch.get() != null) throw new BadRequestException("No se admiten lotes UML anidados.");
+    projectService.requireCanEdit(projectId, email);
+    DiagramaClase diagram = findDiagram(projectId, diagramId);
+    requireNotLocked(diagram, email);
+    long next = reserveNextRevision(diagramId, expectedRevision);
+    diagram.setRevision(next);
+    activeBatch.set(new Batch(diagramId, expectedRevision, next));
+    T result;
+    try { result = operations.get(); } finally { activeBatch.remove(); }
+    notifyCollabAfterCommit(diagramId, "PROPOSAL_APPLIED", next);
+    return result;
   }
 
   @Transactional(readOnly = true)

@@ -60,22 +60,34 @@ public class JwtWebSocketHandshakeInterceptor implements HandshakeInterceptor {
 
     try {
       String[] path = request.getURI().getPath().split("/");
-      if (path.length < 4 || !"diagrams".equals(path[path.length - 2])) {
-        response.setStatusCode(HttpStatus.FORBIDDEN);
-        return false;
-      }
-      java.util.UUID diagramId = java.util.UUID.fromString(path[path.length - 1]);
-      DiagramaClase diagram = diagrams.findById(diagramId).orElse(null);
-      if (diagram == null) {
+      if (path.length == 4 && "ws".equals(path[1]) && "diagrams".equals(path[2])) {
+        java.util.UUID diagramId = java.util.UUID.fromString(path[3]);
+        DiagramaClase diagram = diagrams.findById(diagramId).orElse(null);
+        if (diagram == null) {
+          response.setStatusCode(HttpStatus.FORBIDDEN);
+          return false;
+        }
+        java.util.UUID projectId = diagram.getProject().getId();
+        projectService.requireAccess(projectId, email);
+        attributes.put("authorizedProjectId", projectId);
+        attributes.put("authorizedDiagramId", diagramId);
+      } else if (path.length == 5 && "ws".equals(path[1]) && "projects".equals(path[2]) && "chat".equals(path[4])) {
+        java.util.UUID projectId = java.util.UUID.fromString(path[3]);
+        projectService.requireAccess(projectId, email);
+        attributes.put("authorizedProjectId", projectId);
+        attributes.put("authorizedScopeType", "PROJECT_CHAT");
+      } else if (path.length == 5 && "ws".equals(path[1]) && "projects".equals(path[2]) && "voice".equals(path[4])) {
+        java.util.UUID projectId = java.util.UUID.fromString(path[3]);
+        projectService.requireAccess(projectId, email);
+        attributes.put("authorizedProjectId", projectId);
+        attributes.put("authorizedScopeType", "PROJECT_VOICE");
+      } else {
         response.setStatusCode(HttpStatus.FORBIDDEN);
         return false;
       }
 
-      java.util.UUID projectId = diagram.getProject().getId();
-      projectService.requireAccess(projectId, email);
       attributes.put("authenticatedUserEmail", email);
-      attributes.put("authorizedProjectId", projectId);
-      attributes.put("authorizedDiagramId", diagramId);
+      attributes.put("authorizedExpiresAt", jwtService.extractExpiration(token));
       return true;
     } catch (RuntimeException exception) {
       response.setStatusCode(HttpStatus.FORBIDDEN);

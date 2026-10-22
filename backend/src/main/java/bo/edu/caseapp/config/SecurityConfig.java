@@ -19,7 +19,7 @@ public class SecurityConfig {
     return http.csrf(csrf -> csrf.disable()).cors(cors -> { }).sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         // WebSocket upgrades are permitAll at the servlet filter because browsers cannot attach Authorization headers;
         // JwtWebSocketHandshakeInterceptor validates the bearer token and project membership before accepting them.
-        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/auth/**", "/api/health", "/ws/diagrams/**").permitAll().anyRequest().authenticated())
+        .authorizeHttpRequests(auth -> auth.requestMatchers("/api/auth/**", "/api/health", "/ws/diagrams/**", "/ws/projects/**").permitAll().anyRequest().authenticated())
         .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class).build();
   }
 }

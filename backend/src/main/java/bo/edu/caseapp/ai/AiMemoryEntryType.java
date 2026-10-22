@@ -1,0 +1,10 @@
+package bo.edu.caseapp.ai;
+
+public enum AiMemoryEntryType {
+  SYSTEM_CONTEXT,
+  BUSINESS_RULE,
+  FUNCTIONAL_CONSTRAINT,
+  ARCHITECTURE_DECISION,
+  MODELING_CONVENTION,
+  ADDITIONAL
+}

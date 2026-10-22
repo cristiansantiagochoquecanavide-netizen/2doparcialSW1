@@ -22,18 +22,11 @@ public final class AiRequests {
 
   public record ChatRequest(@NotBlank String question) {}
 
-  public record AnalyzeImageRequest(
-      @NotBlank String imageBase64,
-      String filename,
-      String promptHint
-  ) {}
-
-  /** Kept only for the private legacy fallback implementation; no controller exposes it. */
+  /** Contrato interno legado; no contiene ni acepta credenciales del proveedor. */
   record LegacyReconstructImageRequest(
       String imageBase64,
       String filename,
       String promptHint,
-      String geminiApiKey,
       List<LegacyDetectedClass> clientDetectedClasses,
       List<LegacyDetectedRelation> clientDetectedRelations
   ) {}
@@ -42,6 +35,12 @@ public final class AiRequests {
   record LegacyDetectedAttr(String visibility, String name, String type) {}
   record LegacyDetectedMethod(String visibility, String name, String returnType) {}
   record LegacyDetectedRelation(String source, String target, String name, String tipo, String multSource, String multTarget) {}
+
+  public record AnalyzeImageRequest(
+      @NotBlank String imageBase64,
+      String filename,
+      String promptHint
+  ) {}
 
   public enum ImageImportMode { ADD, REPLACE }
 

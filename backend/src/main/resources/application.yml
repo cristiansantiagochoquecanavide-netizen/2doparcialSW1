@@ -1,4 +1,7 @@
 spring:
+  datasource:
+    hikari:
+      connection-init-sql: SET search_path TO case_tool, public
   application:
     name: case-api
   config:
@@ -24,8 +27,34 @@ app:
   jwt:
     secret: ${JWT_SECRET:change-this-development-secret-to-a-safe-32-byte-minimum}
     expiration-minutes: ${JWT_EXPIRATION_MINUTES:480}
+  voice:
+    max-participants: ${VOICE_MAX_PARTICIPANTS:6}
+    ice-servers-json: '${VOICE_ICE_SERVERS_JSON:[]}'
   ai:
     provider: ${AI_PROVIDER:groq}
+    context-max-chars: ${AI_CONTEXT_MAX_CHARS:12000}
+    max-output-tokens:
+      chat: ${AI_MAX_OUTPUT_TOKENS_CHAT:800}
+      command: ${AI_MAX_OUTPUT_TOKENS_COMMAND:800}
+      image: ${AI_MAX_OUTPUT_TOKENS_IMAGE:1500}
+      conversation: ${AI_MAX_OUTPUT_TOKENS_CONVERSATION:1000}
+      proposal: ${AI_MAX_OUTPUT_TOKENS_PROPOSAL:1800}
+    # Proactive analysis reserves budget before invoking Groq; explicit chat keeps its allowance.
+    project-budget-tokens: ${AI_PROJECT_BUDGET_TOKENS:100000}
+    proactive:
+      enabled: ${AI_PROACTIVE_ENABLED:true}
+      debounce-seconds: ${AI_PROACTIVE_DEBOUNCE_SECONDS:12}
+      poll-ms: ${AI_PROACTIVE_POLL_MS:2000}
+      max-calls: ${AI_PROACTIVE_MAX_CALLS:8}
+      period-seconds: ${AI_PROACTIVE_PERIOD_SECONDS:3600}
+      token-budget: ${AI_PROJECT_BUDGET_TOKENS:100000}
+      explicit-reserve: ${AI_PROACTIVE_EXPLICIT_RESERVE:50000}
+      max-output-tokens: ${AI_PROACTIVE_MAX_OUTPUT_TOKENS:700}
+      max-attempts: ${AI_PROACTIVE_MAX_ATTEMPTS:3}
+      retry-seconds: ${AI_PROACTIVE_RETRY_SECONDS:60}
+      rate-limit-pause-seconds: ${AI_PROACTIVE_RATE_LIMIT_PAUSE_SECONDS:120}
+      lease-seconds: ${AI_PROACTIVE_LEASE_SECONDS:120}
+      dedup-hours: ${AI_PROACTIVE_DEDUP_HOURS:24}
   groq:
     api-key: ${GROQ_API_KEY:}
     model: ${GROQ_MODEL:qwen/qwen3.8-27b}

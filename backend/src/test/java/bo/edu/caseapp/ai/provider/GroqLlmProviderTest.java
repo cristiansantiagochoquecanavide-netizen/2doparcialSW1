@@ -132,6 +132,35 @@ class GroqLlmProviderTest {
   }
 
   @Test
+  void chat_whenServerError_returnsSanitizedFailure() throws Exception {
+    when(mockHttpResponse.statusCode()).thenReturn(503);
+    when(mockHttpResponse.body()).thenReturn("{\"error\":{\"message\":\"sensitive provider detail\"}}");
+    when(mockHttpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+        .thenReturn(mockHttpResponse);
+
+    GroqLlmProvider provider = new GroqLlmProvider("dummy-key", "qwen/qwen3.8-27b", "https://api.groq.com/openai/v1", 30, mockHttpClient, objectMapper);
+    LlmResponse response = provider.chat(List.of(LlmMessage.user("Hola")), 100, 0.2);
+
+    assertFalse(response.success());
+    assertEquals(503, response.httpStatusCode());
+    assertFalse(response.errorMessage().contains("sensitive provider detail"));
+  }
+
+  @Test
+  void chat_whenProviderReturnsEmptyOrMalformedChoice_rejectsResponse() throws Exception {
+    when(mockHttpResponse.statusCode()).thenReturn(200);
+    when(mockHttpResponse.body()).thenReturn("{\"choices\":[]}");
+    when(mockHttpClient.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+        .thenReturn(mockHttpResponse);
+
+    GroqLlmProvider provider = new GroqLlmProvider("dummy-key", "qwen/qwen3.8-27b", "https://api.groq.com/openai/v1", 30, mockHttpClient, objectMapper);
+    LlmResponse response = provider.chat(List.of(LlmMessage.user("Hola")), 100, 0.2);
+
+    assertFalse(response.success());
+    assertEquals(502, response.httpStatusCode());
+  }
+
+  @Test
   void analyzeImage_serializesOpenAiCompatibleMultimodalPayload() throws Exception {
     String jsonResponse = """
         {

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "node --test src/uml/offlineQueue.test.mjs"
+    "test": "node --test src/uml/*.test.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.6",
