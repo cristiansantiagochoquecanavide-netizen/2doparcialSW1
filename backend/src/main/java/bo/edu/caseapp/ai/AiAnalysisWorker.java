@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
 public class AiAnalysisWorker {
   private static final Logger log = LoggerFactory.getLogger(AiAnalysisWorker.class);
   static final String INSTRUCTIONS = """
-      Eres el Agente CASE IA, revisor técnico del equipo. Responde exclusivamente con un objeto JSON válido en español.
+      Eres el ACODI, revisor técnico del equipo. Responde exclusivamente con un objeto JSON válido en español.
       Analiza el estado UML autorizado de UNA revisión y prioriza como máximo UNA observación concreta útil.
       No modifiques el diagrama. Dirige las recomendaciones a Equipo. No inventes reglas del negocio ni identificadores.
       Distingue UML conceptual de transformación relacional: no todas las clases son tablas.

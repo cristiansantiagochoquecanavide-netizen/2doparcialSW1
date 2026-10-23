@@ -31,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional
 public class AiConversationStore {
+  @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.chat.ProjectChatService channelChat;
   private static final int DEFAULT_PAGE = 50;
   private static final int MAX_PAGE = 100;
   private final ProjectService projects;
@@ -165,7 +166,7 @@ public class AiConversationStore {
     List<PromptTurn> turns = rows.stream().filter(message -> !message.getId().equals(currentQuestionId))
         .filter(message -> message.getStatus() == AiConversationMessageStatus.COMPLETED)
         .limit(10).map(message -> new PromptTurn(message.getSenderType() == AiConversationSenderType.AGENT ? "assistant" : "user",
-            message.getSender() == null ? "Agente CASE IA" : message.getSender().getName(), message.getContent()))
+            message.getSender() == null ? "ACODI" : message.getSender().getName(), message.getContent()))
         .toList();
     List<PromptTurn> chronological = new ArrayList<>(turns);
     Collections.reverse(chronological);
@@ -203,7 +204,8 @@ public class AiConversationStore {
     AiConversation conversation = authorized(projectId, conversationId, member);
     AiConversationMessage question = question(conversationId, questionId, member);
     AiConversationMessage answer = messages.findByReplyTo_Id(questionId).orElse(null);
-    return new Turn(response(question), answer == null ? null : response(answer), false);
+    var proposalIds=jdbc.queryForList("SELECT p.id FROM ai_uml_proposal p JOIN ai_proposal_request r ON r.id=p.request_id WHERE r.question_id=? AND p.project_id=? AND p.conversation_id=? ORDER BY p.created_at DESC LIMIT 1",UUID.class,questionId,projectId,conversationId);
+    return new Turn(response(question), answer == null ? null : response(answer), false,proposalIds.isEmpty()?null:proposalIds.getFirst());
   }
 
   /** Internal system path: always a group conversation, never supplied through a message HTTP request. */
@@ -223,7 +225,9 @@ public class AiConversationStore {
         AiConversationSenderType.AGENT, content, AiConversationMessageStatus.COMPLETED);
     message.recordUsage(promptTokens, completionTokens, latencyMs);
     message = messages.saveAndFlush(message);
-    conversation.touch(); publish(conversation, message);
+    conversation.touch();
+    publish(conversation, message);
+    if(channelChat!=null) channelChat.publishRecommendation(projectId,email,content,message.getId());
     return new Published(conversation.getId(), message.getId());
   }
   public record Published(UUID conversationId, UUID messageId) { }
@@ -280,7 +284,7 @@ public class AiConversationStore {
   private Message response(AiConversationMessage value) {
     User sender = value.getSender(), recipient = value.getRecipient();
     return new Message(value.getId(), value.getClientMessageId(), value.getSenderType(),
-        sender == null ? null : sender.getId(), sender == null ? "Agente CASE IA" : sender.getName(),
+        sender == null ? null : sender.getId(), sender == null ? "ACODI" : sender.getName(),
         recipient == null ? null : recipient.getId(), recipient == null ? null : recipient.getName(),
         value.getContent(), value.getStatus(), value.getErrorCode(), value.getPromptTokens(),
         value.getCompletionTokens(), value.getLatencyMs(), value.getReplyTo() == null ? null : value.getReplyTo().getId(), value.getCreatedAt());

@@ -157,7 +157,7 @@ public class AiMemoryService {
     return new Entry(entry.getId(), entry.getProject().getId(),
         entry.getDiagram() == null ? null : entry.getDiagram().getId(), entry.getEntryType(),
         entry.getConfidenceScope(), entry.getContent(), creator == null ? null : creator.getId(),
-        creator == null ? "Agente CASE IA" : creator.getName(), author.getId(), author.getName(),
+        creator == null ? "ACODI" : creator.getName(), author.getId(), author.getName(),
         entry.getCreatedAt(), entry.getUpdatedAt());
   }
 

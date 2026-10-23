@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/projects/{projectId}/chat")
 public class ProjectChatController {
   private final ProjectChatService chat;
+  @org.springframework.beans.factory.annotation.Autowired private AcodiStore acodi;
 
   public ProjectChatController(ProjectChatService chat) {
     this.chat = chat;
@@ -51,5 +52,10 @@ public class ProjectChatController {
   ) {
     SendMessageResult result = chat.send(projectId, channelId, authentication.getName(), request);
     return ResponseEntity.status(result.created() ? HttpStatus.CREATED : HttpStatus.OK).body(result.message());
+  }
+  @PostMapping("/channels/{channelId}/messages/{messageId}/acodi/retry")
+  public Invocation retry(@PathVariable UUID projectId,@PathVariable UUID channelId,@PathVariable UUID messageId,
+      Authentication authentication,@Valid @RequestBody AcodiStore.Retry request) {
+    return acodi.retry(projectId,channelId,messageId,authentication.getName(),request);
   }
 }

@@ -14,5 +14,7 @@ public final class AiConversationResponses {
       String content, AiConversationMessageStatus status, String errorCode, int promptTokens,
       int completionTokens, Long latencyMs, UUID replyToMessageId, Instant createdAt) { }
   public record MessagePage(List<Message> messages, UUID nextCursor, boolean hasMore) { }
-  public record Turn(Message question, Message answer, boolean created) { }
+  public record Turn(Message question, Message answer, boolean created, UUID proposalId) {
+    public Turn(Message question,Message answer,boolean created){this(question,answer,created,null);}
+  }
 }

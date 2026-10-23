@@ -18,6 +18,10 @@ import java.util.concurrent.CopyOnWriteArraySet;
 public class UmlWebSocketHandler extends TextWebSocketHandler {
   private static final Logger log = LoggerFactory.getLogger(UmlWebSocketHandler.class);
   private final Map<String, Set<WebSocketSession>> diagramSessions = new ConcurrentHashMap<>();
+  @org.springframework.transaction.event.TransactionalEventListener(phase=org.springframework.transaction.event.TransactionPhase.AFTER_COMMIT)
+  public void onCanvasProposal(bo.edu.caseapp.ai.UmlCanvasProposalChanged event) {
+    broadcastDiagramChanged(event.diagramId(),"UML_PROPOSAL_CHANGED");
+  }
 
   @Override
   public void afterConnectionEstablished(WebSocketSession session) {

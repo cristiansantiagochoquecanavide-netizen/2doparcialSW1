@@ -3,17 +3,21 @@ import { ChatIcon, UsersIcon, MicIcon, SendIcon, VolumeIcon, HashIcon, MaximizeI
 import { VoiceRoom } from './VoiceRoom'
 import { AiConversationsPanel } from './AiConversationsPanel'
 import { useAgentSpeech } from './AgentSpeechUI'
+import { AcodiChannelMessage } from './AcodiChannelMessage'
+import { insertAcodiMention, channelSpeechMessage, channelRecommendationFrame } from './acodiChannelClient.mjs'
 
 export interface ChannelItem { id: string; slug: string; name: string; description: string | null; createdAt: string }
 export interface ChatMessage {
   id: string; channelId: string; senderUserId: string | null; senderName: string; senderEmail: string | null
   senderRole: string; authorType: 'USER' | 'AGENT'; clientMessageId: string; content: string
   createdAt: string; replyToMessageId: string | null
+  canonicalAiMessageId?: string | null
+  acodi?: { status: string; diagramId: string | null; attempts: number; errorCode: string | null; retryAfter: string | null; responseMessageId: string | null; maxAttempts?: number } | null
 }
 export interface TeamMember { id: string; userId: string; name: string; email: string; role: string }
 type MessagePage = { messages: ChatMessage[]; nextCursor: string | null; hasMore: boolean }
 type PageState = { nextCursor: string | null; hasMore: boolean; loaded: boolean; loadingOlder: boolean }
-type Outgoing = { clientMessageId: string; content: string; channelId: string }
+type Outgoing = { clientMessageId: string; content: string; channelId: string; diagramId: string | null }
 interface Props {
   projectId: string; diagramId: string | null; projectName: string; diagramName: string; token: string; members: TeamMember[]
   currentUser: { name: string; email: string; role: string }; isWide: boolean; visible?: boolean
@@ -50,9 +54,14 @@ export function LiveTeamChatPanel({
   onToggleWide, onClose, onSwitchToInspector
 }: Props) {
   const speech = useAgentSpeech()
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const drafts = useRef(new Map<string, string>())
+  const retryKeys = useRef(new Map<string, string>())
+  const [agentBusy, setAgentBusy] = useState(false)
   const [channels, setChannels] = useState<ChannelItem[]>([])
   const [activeChannelId, setActiveChannelId] = useState('')
-  const [activeTab, setActiveTab] = useState<'chat' | 'members' | 'voice' | 'ai'>('chat')
+  const [activeTab, setActiveTab] = useState<'chat' | 'members' | 'voice'>('chat')
+  const [agentConversations, setAgentConversations] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [reload, setReload] = useState(0)
@@ -74,6 +83,26 @@ export function LiveTeamChatPanel({
   const activeMessages = messages[activeChannelId] || []
   const page = pages[activeChannelId]
   const initialLoaded = Boolean(page?.loaded)
+  const [, setRetryClock] = useState(0)
+  const hasFailedAgent = activeMessages.some(message => message.acodi?.status === 'FALLIDO')
+  useEffect(() => { if (!hasFailedAgent) return; const timer = window.setInterval(() => setRetryClock(value => value + 1), 2000); return () => clearInterval(timer) }, [hasFailedAgent])
+  useEffect(() => {
+    if (activeTab === 'chat' && !agentConversations) speech.view({ conversationId: 'channel:' + activeChannelId, scope: 'GROUP', active: visible && Boolean(activeChannelId) })
+    else if (activeTab !== 'chat') speech.view({ conversationId: '', scope: 'GROUP', active: false })
+  }, [activeTab, activeChannelId, agentConversations, visible, speech.view])
+  function selectChannel(id: string) { drafts.current.set(activeChannelId, input); setActiveChannelId(id); setInput(drafts.current.get(id) || ''); setAgentConversations(false) }
+  function mention() {
+    const result = insertAcodiMention(input, composerRef.current?.selectionStart ?? input.length)
+    if (result.text.length > 4000) { setSendError('El mensaje está lleno. Deja espacio para insertar @ACODI.'); return }
+    setInput(result.text); requestAnimationFrame(() => { composerRef.current?.focus(); composerRef.current?.setSelectionRange(result.cursor, result.cursor) })
+  }
+  async function retryAcodi(message: ChatMessage) {
+    if (agentBusy) return
+    setAgentBusy(true); setSendError('')
+    const key = retryKeys.current.get(message.id) || crypto.randomUUID(); retryKeys.current.set(message.id, key)
+    try { await request(`/api/projects/${projectId}/chat/channels/${message.channelId}/messages/${message.id}/acodi/retry`, token, { method: 'POST', body: JSON.stringify({ clientRequestId: key, diagramId }) }); retryKeys.current.delete(message.id); await refresh() }
+    catch (error) { setSendError(error instanceof Error ? error.message : 'No se pudo reintentar ACODI.') } finally { setAgentBusy(false) }
+  }
 
   const refresh = useCallback(async () => {
     const results = await Promise.all(channelsRef.current.map(async (channel) => ({
@@ -92,6 +121,7 @@ export function LiveTeamChatPanel({
     channelsRef.current = []
     setChannels([]); setActiveChannelId(''); setMessages({}); setPages({})
     setLoading(true); setLoadError(''); setSendError('')
+    drafts.current.clear(); retryKeys.current.clear(); setInput('')
     async function load() {
       try {
         const list = await request<ChannelItem[]>('/api/projects/' + projectId + '/chat/channels', token)
@@ -149,6 +179,8 @@ export function LiveTeamChatPanel({
           }
           if (frame.type !== 'CHAT_MESSAGE' || frame.projectId !== projectId || !frame.channelId || !frame.message || frame.message.channelId !== frame.channelId) return
           const msg = frame.message
+          const recommendation = channelRecommendationFrame(projectId, msg)
+          if (recommendation) speech.receive(recommendation)
           const scroll = activeRef.current === frame.channelId && nearBottom.current
           setMessages((old) => ({ ...old, [frame.channelId as string]: mergeMessages(old[frame.channelId as string] || [], [msg]) }))
           if (scroll) requestAnimationFrame(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }))
@@ -198,7 +230,7 @@ export function LiveTeamChatPanel({
   }
   async function send() {
     if (sending || !activeChannelId) return
-    const outgoing = retry || { clientMessageId: crypto.randomUUID(), content: input.trim(), channelId: activeChannelId }
+    const outgoing = retry || { clientMessageId: crypto.randomUUID(), content: input.trim(), channelId: activeChannelId, diagramId }
     if (!outgoing.content) return
     setSending(true); setSendError('')
     try {
@@ -208,7 +240,8 @@ export function LiveTeamChatPanel({
       )
       setMessages((old) => ({ ...old, [message.channelId]: mergeMessages(old[message.channelId] || [], [message]) }))
       setPages((old) => ({ ...old, [message.channelId]: { ...old[message.channelId], loaded: true } }))
-      setInput((value) => value === outgoing.content ? '' : value)
+      if (activeRef.current === message.channelId) setInput((value) => value.trim() === outgoing.content ? '' : value)
+      if (drafts.current.get(message.channelId)?.trim() === outgoing.content) drafts.current.delete(message.channelId)
       setRetry(null); nearBottom.current = true
       requestAnimationFrame(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }))
     } catch (error) {
@@ -239,17 +272,14 @@ export function LiveTeamChatPanel({
       <div className="team-subtabs">
         <button type="button" className={'team-subtab-btn ' + (activeTab === 'chat' ? 'active' : '')} onClick={() => setActiveTab('chat')}><ChatIcon size={13} /> Canales y Chat</button>
         <button type="button" className={'team-subtab-btn ' + (activeTab === 'members' ? 'active' : '')} onClick={() => setActiveTab('members')}><UsersIcon size={13} /> Participantes ({members.length})</button>
-        <button type="button" className={'team-subtab-btn ' + (activeTab === 'ai' ? 'active' : '')} onClick={() => setActiveTab('ai')}>✦ Agente IA</button>
       </div>
 
       <div className="team-voice-view" hidden={activeTab !== 'voice'}>
         <VoiceRoom key={projectId + ':' + token} projectId={projectId} token={token} currentUserName={currentUser.name} onBackToChat={() => setActiveTab('chat')} />
       </div>
-      <div className="team-ai-view" hidden={activeTab !== 'ai'}>
-        <AiConversationsPanel key={projectId + ':' + token} projectId={projectId} diagramId={diagramId} token={token} currentUser={currentUser} active={visible && activeTab === 'ai'} />
-      </div>
-      {activeTab === 'ai' ? null : activeTab === 'members' ? (
+      {activeTab === 'members' && (
         <div className="team-members-view">
+          <div className="team-virtual-agent"><span className="team-avatar">AC</span><strong>ACODI</strong><span className="role-pill">Agente IA</span><small>Agente Colaborador de Diagramado · Invócalo con @ACODI en un canal.</small></div>
           <div className="team-section-label">MIEMBROS DEL PROYECTO</div>
           {members.length === 0 ? <div className="team-state-container"><p>No hay miembros disponibles.</p></div> : (
             <ul className="team-member-list">{members.map((member) => (
@@ -261,15 +291,20 @@ export function LiveTeamChatPanel({
             ))}</ul>
           )}
         </div>
-      ) : activeTab === 'voice' ? null : (
-        <div className="team-content-split">
+      )}
+        <div className="team-content-split" hidden={activeTab !== 'chat'}>
           <nav className="team-channel-sidebar" aria-label="Canales del proyecto">
             <div className="team-channel-group-title">CANALES DE TEXTO</div>
-            {channels.map((channel) => <button key={channel.id} type="button" className={'team-channel-link ' + (activeChannelId === channel.id ? 'active' : '')} onClick={() => setActiveChannelId(channel.id)} title={channel.description || channel.name}><HashIcon size={13} className="channel-icon" /><span className="channel-name">{channel.name}</span></button>)}
+            {channels.map((channel) => <button key={channel.id} type="button" className={'team-channel-link ' + (activeChannelId === channel.id ? 'active' : '')} onClick={() => selectChannel(channel.id)} title={channel.description || channel.name}><HashIcon size={13} className="channel-icon" /><span className="channel-name">{channel.name}</span></button>)}
             <div className="team-channel-group-title">CANALES DE VOZ</div>
             <button type="button" className="team-channel-link voice-channel" onClick={() => setActiveTab('voice')} title="Entrar a la sala de voz"><VolumeIcon size={13} className="channel-icon" /><span className="channel-name">Sala de diseño</span></button>
+            <div className="team-channel-group-title">CONVERSACIONES DE ACODI</div>
+            <button type="button" className={'team-channel-link ' + (agentConversations ? 'active' : '')} onClick={() => setAgentConversations(true)}>Historiales y chats privados</button>
           </nav>
-          <section className="team-chat-area">
+          <section className="team-chat-area" hidden={!agentConversations}>
+            <AiConversationsPanel key={projectId + ':' + token} projectId={projectId} diagramId={diagramId} token={token} currentUser={currentUser} active={visible && activeTab === 'chat' && agentConversations} chatOnly />
+          </section>
+          <section className="team-chat-area" hidden={agentConversations}>
             <div className="team-chat-header"><div className="team-chat-header-info"><HashIcon size={14} className="channel-icon-header" /><strong>{activeChannel?.name || 'Canales del proyecto'}</strong></div><span className="team-chat-header-desc">{activeChannel?.description || 'Mensajes visibles para miembros autorizados.'}</span></div>
             {loading ? <div className="team-state-container"><div className="team-spinner" /><p>Cargando canales y mensajes…</p></div>
               : loadError && channels.length === 0 ? <div className="team-state-container team-error-state"><h4>No se pudo cargar el chat</h4><p>{loadError}</p><button type="button" className="team-retry-btn" onClick={() => setReload((value) => value + 1)}>Reintentar</button></div>
@@ -281,7 +316,7 @@ export function LiveTeamChatPanel({
                       {activeMessages.length === 0 && initialLoaded ? <div className="team-state-container"><ChatIcon size={28} color="#94a3b8" /><p>Aún no hay mensajes en #{activeChannel?.name}.</p><small>Los mensajes se guardan y sincronizan con integrantes autorizados.</small></div>
                         : activeMessages.map((message) => {
                           const own = message.senderEmail?.toLowerCase() === currentUser.email.toLowerCase()
-                          return <article key={message.id} className={'team-message-card' + (own ? ' team-msg-own' : '')}><div className="team-msg-avatar">{message.senderName.slice(0, 1).toUpperCase()}</div><div className="team-msg-body"><header className="team-msg-header"><strong className="team-msg-author">{message.senderName}</strong><span className="role-pill">{message.senderRole}</span><time className="team-msg-time" dateTime={message.createdAt}>{messageTime(message.createdAt)}</time></header><div className="team-msg-text">{message.content}</div></div></article>
+                          return <AcodiChannelMessage key={message.id} message={message} own={own} canListen={speech.state.available && !speech.state.microphoneActive && activeTab === 'chat' && visible} canRetry={own} busy={agentBusy} onListen={() => speech.manual(channelSpeechMessage(message), { projectId, conversationId: 'channel:' + activeChannelId, scope: 'GROUP' })} onRetry={() => void retryAcodi(message)} />
                         })}
                       <div ref={endRef} />
                     </div>
@@ -289,15 +324,14 @@ export function LiveTeamChatPanel({
             <form className="team-input-form" onSubmit={submit}>
               <div className="team-input-scope-indicator"><UsersIcon size={11} /><span><strong>Canal del proyecto:</strong> visible para sus miembros autorizados</span></div>
               <div className="team-input-bar">
-                <textarea value={input} rows={2} maxLength={4000} onChange={(event) => { setInput(event.target.value); if (retry && event.target.value.trim() !== retry.content) { setRetry(null); setSendError('') } }} onKeyDown={inputKeyDown} placeholder={activeChannel ? 'Mensaje para #' + activeChannel.name : 'Selecciona un canal'} disabled={!activeChannel || loading || connection === 'revoked' || sending} aria-label="Escribe un mensaje" />
-                <button type="button" className="team-mic-btn" disabled title="La comunicación por voz estará disponible en el Bloque 11"><MicIcon size={14} /></button>
+                <textarea ref={composerRef} value={input} rows={2} maxLength={4000} onChange={(event) => { setInput(event.target.value); if (retry && event.target.value.trim() !== retry.content) { setRetry(null); setSendError('') } }} onKeyDown={inputKeyDown} placeholder={activeChannel ? 'Mensaje para #' + activeChannel.name : 'Selecciona un canal'} disabled={!activeChannel || loading || connection === 'revoked' || sending} aria-label="Escribe un mensaje" />
+                <button type="button" className="team-acodi-invoke" disabled={!activeChannel || loading || sending || connection === 'revoked'} onClick={mention} title="Invocar a ACODI — Agente Colaborador de Diagramado">@ACODI</button>
                 <button type="submit" className="team-send-btn" disabled={!activeChannel || loading || !input.trim() || sending || connection === 'revoked' || Boolean(retry && retry.channelId !== activeChannelId)} title={retry ? (retry.channelId === activeChannelId ? 'Reintentar con la misma clave de idempotencia' : 'Vuelve a #' + (channels.find((channel) => channel.id === retry.channelId)?.name || 'canal') + ' para reintentar') : 'Enviar mensaje'}><SendIcon size={14} /><span>{sending ? 'Enviando…' : retry ? (retry.channelId === activeChannelId ? 'Reintentar' : 'Volver al canal') : 'Enviar'}</span></button>
               </div>
-              <div className="team-input-hint"><small>Enter envía · Shift+Enter agrega una línea · Máximo 4.000 caracteres</small>{sendError && <small className="team-send-error" role="alert">{sendError}</small>}</div>
+              <div className="team-input-hint"><small>Enter envía · Shift+Enter agrega una línea · @ACODI ayuda: memoria, análisis y propuestas</small>{sendError && <small className="team-send-error" role="alert">{sendError}</small>}</div>
             </form>
           </section>
         </div>
-      )}
     </aside>
   )
 }

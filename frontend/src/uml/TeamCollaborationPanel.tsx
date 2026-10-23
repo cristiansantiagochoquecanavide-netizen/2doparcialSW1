@@ -83,7 +83,7 @@ const CHANNELS: ChannelItem[] = [
   },
   {
     id: 'ai-grupo',
-    name: 'Agente CASE IA (Grupal)',
+    name: 'ACODI (Grupal)',
     type: 'ai-group',
     description: 'Consultoría y recomendaciones públicas para todos los colaboradores'
   },
@@ -109,7 +109,7 @@ const DEMO_FIXTURES: ChatMessage[] = [
   {
     id: 'msg-2',
     channelId: 'general',
-    senderName: 'Agente CASE IA',
+    senderName: 'ACODI',
     senderEmail: 'agent@caseapp.internal',
     senderRole: 'AGENTE',
     targetAudience: 'Equipo',
@@ -121,7 +121,7 @@ const DEMO_FIXTURES: ChatMessage[] = [
   {
     id: 'msg-3',
     channelId: 'diseno-uml',
-    senderName: 'Agente CASE IA',
+    senderName: 'ACODI',
     senderEmail: 'agent@caseapp.internal',
     senderRole: 'AGENTE',
     targetAudience: 'Equipo',
@@ -133,7 +133,7 @@ const DEMO_FIXTURES: ChatMessage[] = [
   {
     id: 'msg-4',
     channelId: 'ai-grupo',
-    senderName: 'Agente CASE IA',
+    senderName: 'ACODI',
     senderEmail: 'agent@caseapp.internal',
     senderRole: 'AGENTE',
     targetAudience: 'Equipo',
@@ -145,7 +145,7 @@ const DEMO_FIXTURES: ChatMessage[] = [
   {
     id: 'msg-5',
     channelId: 'ai-privado',
-    senderName: 'Agente CASE IA',
+    senderName: 'ACODI',
     senderEmail: 'agent@caseapp.internal',
     senderRole: 'AGENTE',
     targetAudience: 'Carlos R.',
@@ -229,11 +229,11 @@ export function TeamCollaborationPanel({
     e.preventDefault()
   }
 
-  // Lista consolidada de participantes incluyendo al Agente CASE IA
+  // Lista consolidada de participantes incluyendo al ACODI
   const allParticipants = [
     {
       id: 'ai-agent-user',
-      name: 'Agente CASE IA',
+      name: 'ACODI',
       email: 'agente@case.local',
       role: 'ASISTENTE',
       isOnline: true,
@@ -375,7 +375,7 @@ export function TeamCollaborationPanel({
           </ul>
           <div className="team-members-footer">
             <small>
-              El Agente CASE IA está reconocido como miembro técnico del equipo para consultas y
+              El ACODI está reconocido como miembro técnico del equipo para consultas y
               supervisión continua.
             </small>
           </div>

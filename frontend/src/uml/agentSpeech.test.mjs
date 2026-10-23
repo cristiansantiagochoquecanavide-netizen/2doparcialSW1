@@ -163,6 +163,6 @@ test('controls render outside the team panel and the synthesis module has no net
   const bundled = await build({ entryPoints: [fileURLToPath(new URL('./AgentSpeechUI.tsx', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react','react/jsx-runtime'] })
   const module = { exports: {} }; new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports)
   const html = renderToStaticMarkup(React.createElement(module.exports.AgentSpeechControls))
-  assert.match(html, /Voz automática del agente/); assert.match(html, /Síntesis no disponible/); assert.match(html, /Detener voz/)
+  assert.match(html, /Voz automática de ACODI/); assert.match(html, /Síntesis no disponible/); assert.match(html, /Detener voz/)
   assert.ok(!html.includes('checked=""'))
 })

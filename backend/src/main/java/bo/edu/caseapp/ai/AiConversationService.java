@@ -19,6 +19,9 @@ public class AiConversationService {
   private final AiOrchestrationService orchestration;
   private final int maxOutputTokens;
   @org.springframework.beans.factory.annotation.Autowired private UmlProposalService proposals;
+  @org.springframework.beans.factory.annotation.Autowired private UmlProposalStore proposalStore;
+  @org.springframework.beans.factory.annotation.Autowired private AiMemoryService sharedMemory;
+  @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.chat.AcodiDeletionClarification deletions;
 
   public AiConversationService(AiConversationStore store, AiOrchestrationService orchestration,
       @Value("${app.ai.max-output-tokens.conversation:1000}") int maxOutputTokens) {
@@ -51,12 +54,35 @@ public class AiConversationService {
   private Turn answer(UUID projectId, String email, Conversation conversation, Message question) {
     long startedAt = System.nanoTime();
     try {
+      String instruction=bo.edu.caseapp.chat.AcodiMention.question(question.content());
+      String local=UmlProposalIntent.normalize(instruction);
+      if(local.matches("(?:ver |mostrar )?(contexto|memoria)(?: del proyecto)?[.!? ]*")) {
+        var view=sharedMemory.get(projectId,conversation.diagramId(),email);var m=view.projectMemory();
+        String text=question.senderName()+", contexto compartido confirmado:\nNombre: "+m.systemName()+"\nDescripción: "+m.systemDescription()+"\nDominio: "+m.businessDomain()+"\nObjetivos: "+m.objectives()+"\nInformación adicional: "+m.additionalContext();
+        for(var entry:view.entries())text+="\n"+entry.id()+" · "+entry.confidenceScope()+" · "+entry.content();
+        return store.completeQuestion(projectId,conversation.id(),question.id(),email,text.length()>7800?text.substring(0,7800):text,0,0,0L);
+      }
+      if(local.matches("(?:ver |listar )?propuestas[.!? ]*")) {
+        String text=conversation.diagramId()==null?"Abre un diagrama para consultar las propuestas.":proposalStore.list(projectId,conversation.diagramId(),conversation.id(),email).stream().map(p->p.id()+" · "+p.status()+" · "+p.description()).collect(java.util.stream.Collectors.joining("\n"));
+        return store.completeQuestion(projectId,conversation.id(),question.id(),email,question.senderName()+", propuestas de esta conversación:\n"+text+"\nUsa @ACODI ver propuesta ID para revisarla.",0,0,0L);
+      }
+      var show=java.util.regex.Pattern.compile("^(?:ver|mostrar) propuesta ([0-9a-f-]{36})[.!? ]*$").matcher(local);
+      if(show.matches() && conversation.diagramId()!=null) {
+        var p=proposalStore.get(projectId,conversation.diagramId(),UUID.fromString(show.group(1)),email);
+        if(conversation.scope()==AiConversationScope.GROUP && p.scope().equals("PRIVATE"))throw new bo.edu.caseapp.error.NotFoundException("Propuesta no encontrada.");
+        var turn=store.completeQuestion(projectId,conversation.id(),question.id(),email,question.senderName()+", "+p.description()+" · "+p.status()+". La vista previa se revisa en el lienzo y no se comparte si es privada.",0,0,0L);
+        return new Turn(turn.question(),turn.answer(),turn.created(),p.id());
+      }
+      if(local.matches("^(guardar|guarda|definir|define|confirmar|eliminar|editar|actualizar) (?:el |la )?(contexto|memoria|entrada|hipotesis|regla|dominio|objetivos|convencion|decision|nombre del sistema)\\b.*"))
+        return store.completeQuestion(projectId,conversation.id(),question.id(),email,question.senderName()+", para cambiar información compartida envía esa instrucción en un canal del proyecto; allí se solicitará confirmación. No se guardó contenido de esta conversación en memoria compartida.",0,0,0L);
       if (proposals != null) {
-        var intent=UmlProposalIntent.classify(question.content());
+        var intent=UmlProposalIntent.classify(instruction);
         if(intent==UmlProposalIntent.Intent.DECIDE || (intent==UmlProposalIntent.Intent.PREPARE && conversation.diagramId()==null))
           return store.completeQuestion(projectId,conversation.id(),question.id(),email,
               question.senderName()+", abre un diagrama y revisa la vista previa de la propuesta. Usa sus botones para aplicar o rechazar los cambios; este mensaje no modifica el UML.",0,0,0L);
         if(intent==UmlProposalIntent.Intent.PREPARE) {
+          String clarification=deletions.question(projectId,conversation.diagramId(),email,instruction);
+          if(clarification!=null)return store.completeQuestion(projectId,conversation.id(),question.id(),email,question.senderName()+", "+clarification,0,0,0L);
           var generation=proposals.forQuestion(projectId,email,conversation,question);
           if(generation.status().equals("ERROR")) return store.failQuestion(projectId,conversation.id(),question.id(),email,null);
           return store.turn(projectId,conversation.id(),question.id(),email);
@@ -73,7 +99,7 @@ public class AiConversationService {
       messages.add(LlmMessage.user(questionText));
       AiOperation operation = conversation.scope() == AiConversationScope.GROUP
           ? AiOperation.AI_CONVERSATION_GROUP : AiOperation.AI_CONVERSATION_PRIVATE;
-      String system = "Eres el Agente CASE IA, integrante de un equipo que diseña software y diagramas UML. "
+      String system = "Eres el ACODI, integrante de un equipo que diseña software y diagramas UML. "
           + "Responde en español, de forma clara y útil. El usuario autenticado es " + question.senderName() + ". "
           + "En esta respuesta, dirígete por su nombre a esa persona. La conversación es "
           + (conversation.scope() == AiConversationScope.GROUP ? "grupal y compartida solo con miembros autorizados" : "privada y exclusiva de esa persona") + ". "

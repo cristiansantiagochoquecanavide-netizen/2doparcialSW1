@@ -40,7 +40,7 @@ public class AiAnalysisStore {
   public Optional<Job> claim() {
     jdbc.update("""
         UPDATE ai_analysis_run r SET outcome = 'ABANDONED', completed_at = now()
-        WHERE outcome = 'RUNNING' AND NOT EXISTS
+        WHERE kind='PROACTIVE' AND outcome = 'RUNNING' AND NOT EXISTS
           (SELECT 1 FROM ai_analysis_job j WHERE j.run_token = r.id AND j.lease_until > now())
         """);
     jdbc.update("""
@@ -92,10 +92,12 @@ public class AiAnalysisStore {
     if (!ownsLease(job)) return false;
     int period = ((Number)policy.get("period_seconds")).intValue();
     var usage = usage(job.projectId(), period);
+    var shared=sharedUsage(job.projectId(),period);
+    boolean explicitWaiting=Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM acodi_channel_job WHERE project_id=? AND status IN ('PENDIENTE','PROCESANDO'))",Boolean.class,job.projectId()));
     long allowance = ((Number)policy.get("token_budget")).longValue() - ((Number)policy.get("explicit_reserve")).longValue();
     var paused = (java.sql.Timestamp)policy.get("paused_until");
     boolean disabled = !((Boolean)policy.get("automatic_enabled")) && !job.force();
-    if (disabled || (paused != null && paused.toInstant().isAfter(Instant.now()))
+    if (disabled || explicitWaiting || ((Number)shared.get("tokens")).longValue()+tokens>((Number)policy.get("token_budget")).longValue() || (paused != null && paused.toInstant().isAfter(Instant.now()))
         || ((Number)usage.get("calls")).intValue() >= ((Number)policy.get("max_calls")).intValue()
         || ((Number)usage.get("tokens")).longValue() + tokens > allowance) {
       jdbc.update("""
@@ -266,8 +268,28 @@ public class AiAnalysisStore {
         SELECT count(*) AS calls, coalesce(sum(charged_tokens), 0) AS tokens,
           count(*) FILTER (WHERE outcome = 'RUNNING') AS running,
           count(*) FILTER (WHERE usage_estimated) AS estimated
-        FROM ai_analysis_run WHERE project_id = ? AND (started_at >= now() - (? * interval '1 second') OR outcome = 'RUNNING')
+        FROM ai_analysis_run WHERE kind='PROACTIVE' AND project_id = ? AND (started_at >= now() - (? * interval '1 second') OR outcome = 'RUNNING')
         """, projectId, period);
+  }
+  private Map<String,Object> sharedUsage(UUID projectId,int period) {
+    return jdbc.queryForMap("SELECT coalesce(sum(charged_tokens),0) AS tokens,count(*) FILTER(WHERE kind='EXPLICIT') AS explicit_calls FROM ai_analysis_run WHERE project_id=? AND (started_at>=now()-(?*interval '1 second') OR outcome='RUNNING')",projectId,period);
+  }
+  public Instant reserveExplicit(UUID projectId,UUID diagramId,String email,UUID runId,long tokens,int maxCalls) {
+    projects.requireAccess(projectId,email);queue.ensurePolicy(projectId);
+    var policy=jdbc.queryForMap("SELECT * FROM ai_analysis_policy WHERE project_id=? FOR UPDATE",projectId);
+    var pause=(java.sql.Timestamp)policy.get("paused_until");
+    if(pause!=null && pause.toInstant().isAfter(Instant.now())) return pause.toInstant();
+    int period=((Number)policy.get("period_seconds")).intValue();var usage=sharedUsage(projectId,period);
+    if(((Number)usage.get("tokens")).longValue()+tokens>((Number)policy.get("token_budget")).longValue()
+        || ((Number)usage.get("explicit_calls")).intValue()>=maxCalls) return Instant.now().plusSeconds(period);
+    jdbc.update("INSERT INTO ai_analysis_run(id,project_id,diagram_id,reserved_tokens,charged_tokens,kind) VALUES (?,?,?,?,?,'EXPLICIT')",runId,projectId,diagramId,tokens,tokens);
+    return null;
+  }
+  public void settleExplicit(UUID projectId,UUID runId,LlmResponse response,long latency,String outcome) {
+    boolean estimated=response==null || response.promptTokens()<=0 || response.completionTokens()<=0;
+    jdbc.update("UPDATE ai_analysis_run SET charged_tokens=CASE WHEN ? THEN reserved_tokens ELSE ? END,prompt_tokens=?,completion_tokens=?,latency_ms=?,http_status=?,usage_estimated=?,outcome=?,completed_at=now() WHERE id=? AND project_id=? AND kind='EXPLICIT'",
+        estimated,response==null?0L:(long)response.promptTokens()+response.completionTokens(),response==null?0:response.promptTokens(),response==null?0:response.completionTokens(),latency,response==null?null:response.httpStatusCode(),estimated,outcome,runId,projectId);
+    if(response!=null && Integer.valueOf(429).equals(response.httpStatusCode())) jdbc.update("UPDATE ai_analysis_policy SET paused_until=greatest(coalesce(paused_until,now()),now()+(?*interval '1 second')) WHERE project_id=?",config.getRateLimitPauseSeconds(),projectId);
   }
   private boolean ownsLease(Job job) {
     return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM ai_analysis_job WHERE diagram_id = ? AND run_token = ? AND lease_until > now())", Boolean.class, job.diagramId(), job.token()));

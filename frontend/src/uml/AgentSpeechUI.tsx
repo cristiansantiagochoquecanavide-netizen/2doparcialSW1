@@ -46,8 +46,8 @@ export function useAgentSpeech() { return useContext(Context) }
 export function AgentSpeechControls() {
   const voice = useAgentSpeech(), state = voice.state
   return <section className="agent-speech-controls" aria-label="Voz del agente">
-    <label><input type="checkbox" checked={state.automatic} disabled={!state.supported || (!state.available && !state.automatic)} onChange={e => voice.automatic(e.target.checked)} />Voz automática del agente</label>
-    <span role="status">{!state.supported ? 'Síntesis no disponible' : !state.available ? 'Falta una voz local en español' : state.speaking ? 'Agente hablando' : state.busy ? 'Iniciando voz…' : state.roomConnected ? state.microphoneActive ? 'En pausa mientras hablas' : 'Voz local · Sala de diseño' : 'Voz local · Fuera de la sala'}</span>
+    <label><input type="checkbox" checked={state.automatic} disabled={!state.supported || (!state.available && !state.automatic)} onChange={e => voice.automatic(e.target.checked)} />Voz automática de ACODI</label>
+    <span role="status">{!state.supported ? 'Síntesis no disponible' : !state.available ? 'Falta una voz local en español' : state.speaking ? 'ACODI hablando' : state.busy ? 'Iniciando voz…' : state.roomConnected ? state.microphoneActive ? 'En pausa mientras hablas' : 'Voz local · Sala de diseño' : 'Voz local · Fuera de la sala'}</span>
     <button type="button" onClick={voice.stop} disabled={!state.busy && !state.pending}>Detener voz</button>
     <details><summary>Volumen y velocidad</summary><label>Volumen del agente<input aria-label="Volumen del agente" type="range" min="0" max="1" step="0.05" value={state.volume} onChange={e => voice.configure({ volume: Number(e.target.value) })} /></label><label>Velocidad<input aria-label="Velocidad del agente" type="range" min="0.5" max="1.5" step="0.1" value={state.rate} onChange={e => voice.configure({ rate: Number(e.target.value) })} /></label><small>Audio local. La lectura automática requiere sala conectada y micrófono propio silenciado. Las respuestas privadas solo se leen manualmente fuera de la sala.</small></details>
     {state.error && <span role="alert">{state.error}</span>}

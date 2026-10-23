@@ -48,6 +48,7 @@ public class ProjectChatMessage {
   @ManyToOne(fetch = FetchType.LAZY)
   @JoinColumn(name = "reply_to_message_id")
   private ProjectChatMessage replyTo;
+  @Column(name="canonical_ai_message_id") private UUID canonicalAiMessageId;
 
   protected ProjectChatMessage() {}
 
@@ -80,4 +81,6 @@ public class ProjectChatMessage {
   public String getContent() { return content; }
   public Instant getCreatedAt() { return createdAt; }
   public ProjectChatMessage getReplyTo() { return replyTo; }
+  public UUID getCanonicalAiMessageId() {return canonicalAiMessageId;}
+  public void setCanonicalAiMessageId(UUID id) {canonicalAiMessageId=id;}
 }

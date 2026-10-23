@@ -11,6 +11,7 @@ public final class ChatRequests {
   public record SendMessage(
       @NotNull UUID clientMessageId,
       @NotBlank @Size(max = 4000) String content,
-      UUID replyToMessageId
-  ) {}
+      UUID replyToMessageId,
+      UUID diagramId
+  ) { public SendMessage(UUID clientMessageId,String content,UUID replyToMessageId) {this(clientMessageId,content,replyToMessageId,null);} }
 }

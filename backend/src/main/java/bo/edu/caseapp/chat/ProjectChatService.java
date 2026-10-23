@@ -30,6 +30,7 @@ public class ProjectChatService {
   private final ProjectService projects;
   private final JdbcTemplate jdbc;
   private final ApplicationEventPublisher events;
+  @org.springframework.beans.factory.annotation.Autowired private AcodiQueue acodi;
 
   public ProjectChatService(
       ProjectChatChannelRepository channels,
@@ -84,6 +85,8 @@ public class ProjectChatService {
     if (content.isEmpty() || content.indexOf('\0') >= 0) {
       throw new BadRequestException("El mensaje debe contener texto válido.");
     }
+    boolean mention=AcodiMention.present(content);
+    UUID diagramId=mention && acodi!=null?acodi.diagram(projectId,email,request.diagramId()):null;
 
     ProjectChatMessage replyTo = null;
     if (request.replyToMessageId() != null) {
@@ -108,11 +111,16 @@ public class ProjectChatService {
       if (!existing.getContent().equals(content) || !sameReply(existing.getReplyTo(), replyId)) {
         throw new ConflictException("La clave de idempotencia ya se usó con otro contenido.");
       }
+      if(mention && acodi!=null) {
+        var job=acodi.view(existing.getId());
+        if(job!=null && !java.util.Objects.equals(job.diagramId(),diagramId)) throw new ConflictException("La clave del mensaje corresponde a otro diagrama.");
+      }
       return new SendMessageResult(response(existing), false);
     }
 
     ProjectChatMessage saved = messages.findById(insertedId)
         .orElseThrow(() -> new IllegalStateException("El mensaje guardado no pudo recuperarse."));
+    if(mention && acodi!=null) acodi.enqueue(projectId,channelId,insertedId,diagramId);
     Message result = response(saved);
     events.publishEvent(new ChatMessageCommittedEvent(projectId, result));
     return new SendMessageResult(result, true);
@@ -138,14 +146,42 @@ public class ProjectChatService {
         message.getId(),
         message.getChannel().getId(),
         sender == null ? null : sender.getId(),
-        sender == null ? "Agente CASE IA" : sender.getName(),
+        sender == null ? "ACODI" : sender.getName(),
         sender == null ? null : sender.getEmail(),
         message.getSenderRole(),
         message.getAuthorType().name(),
         message.getClientMessageId(),
         message.getContent(),
         message.getCreatedAt() == null ? Instant.now() : message.getCreatedAt(),
-        replyTo == null ? null : replyTo.getId()
+        replyTo == null ? null : replyTo.getId(),
+        message.getCanonicalAiMessageId(),
+        acodi!=null && message.getAuthorType()==ChatAuthorType.USER && AcodiMention.present(message.getContent())?acodi.view(message.getId()):null
     );
+  }
+
+  @Transactional
+  public Message publishAgent(UUID projectId,UUID channelId,String email,String content,UUID replyId,UUID canonicalId) {
+    projects.requireAccess(projectId,email);var target=channel(projectId,channelId);
+    if(canonicalId!=null) {
+      var ids=jdbc.queryForList("SELECT id FROM project_chat_message WHERE canonical_ai_message_id=?",UUID.class,canonicalId);
+      if(!ids.isEmpty()) return response(messages.findById(ids.getFirst()).orElseThrow());
+    }
+    var reply=replyId==null?null:messages.findByIdAndChannelId(replyId,channelId).orElseThrow(()->new BadRequestException("Consulta no encontrada en este canal."));
+    if(content==null || content.isBlank() || content.length()>4000 || content.indexOf('\0')>=0) throw new BadRequestException("Respuesta de ACODI no válida.");
+    var value=new ProjectChatMessage(target,null,UUID.randomUUID(),"AGENTE",ChatAuthorType.AGENT,content,Instant.now(),reply);
+    value.setCanonicalAiMessageId(canonicalId);var saved=messages.saveAndFlush(value);var result=response(saved);
+    events.publishEvent(new ChatMessageCommittedEvent(projectId,result));return result;
+  }
+  @Transactional
+  public void publishUpdated(UUID projectId,UUID messageId) {
+    var message=messages.findById(messageId).orElseThrow();
+    if(!message.getChannel().getProject().getId().equals(projectId)) throw new NotFoundException("Mensaje no encontrado.");
+    events.publishEvent(new ChatMessageCommittedEvent(projectId,response(message)));
+  }
+  @Transactional
+  public void publishRecommendation(UUID projectId,String email,String content,UUID canonicalId) {
+    projects.requireAccess(projectId,email);channels.ensureDefaultChannels(projectId);
+    var target=channels.findByProjectIdOrderBySortOrderAscNameAsc(projectId).stream().filter(c->c.getSlug().equals("diseno-uml")).findFirst().orElseThrow();
+    publishAgent(projectId,target.getId(),email,content,null,canonicalId);
   }
 }

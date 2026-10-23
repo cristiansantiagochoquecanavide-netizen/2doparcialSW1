@@ -1,0 +1,10 @@
+.acodi-canvas-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid #e2e8f0; background:#fff; color:#334155; max-height:20vh; overflow:auto; flex-shrink:0; }
+.acodi-canvas-bar strong { flex:1 1 180px; font-size:13px; }
+.acodi-canvas-bar select { max-width:260px; min-width:0; }
+.acodi-preview-active .uml-node-actions { display:none; }
+.uml-node-card.acodi-preview-create, .uml-node-card.acodi-preview-delete { border:2px solid #15803d; }
+.acodi-preview-create .uml-node-title, .acodi-preview-delete .uml-node-title, .acodi-field-preview,
+.acodi-member-preview, .acodi-member-preview .type, .acodi-member-preview .vis { color:#15803d !important; }
+.acodi-member-preview { background:#f0fdf4; }
+.acodi-deleted, .acodi-preview-delete .uml-node-title { text-decoration:line-through; text-decoration-color:#15803d; }
+.acodi-preview-edge .react-flow__edge-text { color:#15803d !important; }

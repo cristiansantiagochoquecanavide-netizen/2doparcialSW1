@@ -26,8 +26,13 @@ public final class ChatResponses {
       UUID clientMessageId,
       String content,
       Instant createdAt,
-      UUID replyToMessageId
-  ) {}
+      UUID replyToMessageId,
+      UUID canonicalAiMessageId,
+      Invocation acodi
+  ) { public Message(UUID id,UUID channelId,UUID senderUserId,String senderName,String senderEmail,String senderRole,String authorType,UUID clientMessageId,String content,Instant createdAt,UUID replyToMessageId) {
+    this(id,channelId,senderUserId,senderName,senderEmail,senderRole,authorType,clientMessageId,content,createdAt,replyToMessageId,null,null);
+  } }
+  public record Invocation(String status,UUID diagramId,int attempts,String errorCode,Instant retryAfter,UUID responseMessageId,int maxAttempts) { }
 
   public record MessagePage(List<Message> messages, UUID nextCursor, boolean hasMore) {}
 

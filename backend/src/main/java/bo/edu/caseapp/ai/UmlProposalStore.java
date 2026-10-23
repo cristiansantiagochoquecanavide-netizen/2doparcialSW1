@@ -23,6 +23,7 @@ public class UmlProposalStore {
   private final AiConversationStore conversations;
   private final ObjectMapper mapper;
   @jakarta.persistence.PersistenceContext private jakarta.persistence.EntityManager entities;
+  @org.springframework.beans.factory.annotation.Autowired private UmlCanvasProposalState canvas;
   public UmlProposalStore(JdbcTemplate jdbc,ProjectService projects,UmlService uml,AiContextService contexts,AiConversationStore conversations,ObjectMapper mapper) {
     this.jdbc=jdbc; this.projects=projects; this.uml=uml; this.contexts=contexts; this.conversations=conversations; this.mapper=mapper;
   }
@@ -71,6 +72,7 @@ public class UmlProposalStore {
   }
 
   public Generation complete(Begin begin,Plan plan,Preview preview,LlmResponse response,long latency) {
+    canvas.lock(begin.diagramId());
     var request=ownedRequest(begin.projectId(),begin.diagramId(),begin.id(),begin.email(),true);
     if(!request.get("status").equals("GENERATING") || ((java.sql.Timestamp)request.get("lease_until")).toInstant().isBefore(Instant.now()))
       throw new ConflictException("La generación caducó. Solicita una nueva propuesta.");
@@ -89,6 +91,7 @@ public class UmlProposalStore {
     if(conversationId!=null && questionId!=null) conversations.completeQuestion(begin.projectId(),conversationId,questionId,begin.email(),
         actor.getUser().getName()+", "+(preview.clarification()==null?"preparé la propuesta «"+plan.description()+"». Revisa los cambios exactos y decide desde su vista previa. "+(begin.sourceNotice()==null?"":begin.sourceNotice())
             :"necesito una aclaración antes de preparar cambios: "+preview.clarification()),response.promptTokens(),response.completionTokens(),latency);
+    canvas.prepared(begin.diagramId(),id,(String)request.get("scope"),preview.clarification()==null);
     return new Generation(begin.id(),"READY",get(begin.projectId(),begin.diagramId(),id,begin.email()),null);
   }
 
@@ -123,6 +126,12 @@ public class UmlProposalStore {
   }
   @Transactional(readOnly=true)
   public View get(UUID projectId,UUID diagramId,UUID id,String email) { return view(authorized(projectId,diagramId,id,email,false),uml.getDiagramRevision(diagramId)); }
+  @Transactional(readOnly=true)
+  public List<View> pendingShared(UUID projectId,UUID diagramId,String email) {
+    projects.requireAccess(projectId,email);uml.requireDiagramAccess(projectId,diagramId,email);
+    return jdbc.queryForList("SELECT id FROM ai_uml_proposal WHERE project_id=? AND diagram_id=? AND scope='GROUP' AND status IN ('PENDIENTE','CONFLICTO') ORDER BY created_at,id",UUID.class,projectId,diagramId)
+        .stream().map(id->get(projectId,diagramId,id,email)).toList();
+  }
   public Map<String,Object> authorized(UUID projectId,UUID diagramId,UUID id,String email,boolean lock) {
     var member=projects.requireAccess(projectId,email); uml.requireDiagramAccess(projectId,diagramId,email);
     var rows=jdbc.queryForList("""

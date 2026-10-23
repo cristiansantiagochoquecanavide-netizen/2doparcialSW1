@@ -10,6 +10,9 @@ export type UmlNodeData = {
   readOnly?: boolean
   onEdit?: (id: string) => void
   onDelete?: (id: string) => void
+  previewKind?: string
+  previewMembers?: Record<string, string>
+  previewFields?: string[]
 }
 
 export type UmlNodeType = Node<UmlNodeData, 'umlClass'>
@@ -59,17 +62,17 @@ function UmlClassNodeComponent({ data, selected }: NodeProps<UmlNodeType>) {
     )
 
   return (
-    <div className={`uml-node-card ${selected ? 'selected' : ''} ${data.elementType.toLowerCase()}`}>
+    <div className={`uml-node-card ${selected ? 'selected' : ''} ${data.elementType.toLowerCase()} ${data.previewKind ? 'acodi-preview' : ''} ${data.previewKind === 'DELETE' ? 'acodi-preview-delete' : ''} ${data.previewKind === 'CREATE' ? 'acodi-preview-create' : ''}`}>
       {/* Handles para conexiones de relaciones UML */}
       {renderConnectionHandles('target')}
       {renderConnectionHandles('source')}
 
       {/* Cabecera del elemento UML */}
       <div className="uml-node-header">
-        {stereotype && <div className="uml-stereotype">{stereotype}</div>}
-        <div className={`uml-node-title ${isAbstract ? 'italic' : ''}`}>{data.name}</div>
+        {stereotype && <div className={`uml-stereotype ${data.previewFields?.some(f => f === 'type' || f === 'stereotype') ? 'acodi-field-preview' : ''}`}>{stereotype}</div>}
+        <div className={`uml-node-title ${isAbstract ? 'italic' : ''} ${data.previewFields?.includes('name') ? 'acodi-field-preview' : ''}`}>{data.name}</div>
         {description && description.trim() && (
-          <div className="uml-node-description" title={description}>
+          <div className={`uml-node-description ${data.previewFields?.includes('description') ? 'acodi-field-preview' : ''}`} title={description}>
             {description}
           </div>
         )}
@@ -108,7 +111,7 @@ function UmlClassNodeComponent({ data, selected }: NodeProps<UmlNodeType>) {
           <div className="uml-empty-line"> </div>
         ) : (
           attributes.map((attr) => (
-            <div key={attr.id} className="uml-attribute-item">
+            <div key={attr.id} title={data.previewMembers?.[attr.id] === 'DELETE' ? 'Eliminar atributo' : undefined} className={`uml-attribute-item ${data.previewMembers?.[attr.id] ? 'acodi-member-preview' : ''} ${data.previewMembers?.[attr.id] === 'DELETE' ? 'acodi-deleted' : ''}`}>
               <span className="vis">{attr.visibility}</span> {attr.name}:{' '}
               <span className="type">{attr.type}</span>
             </div>
@@ -124,7 +127,7 @@ function UmlClassNodeComponent({ data, selected }: NodeProps<UmlNodeType>) {
           methods.map((method) => {
             const cleanName = (method.name || '').replace(/\(\s*\)$/, '')
             return (
-              <div key={method.id} className="uml-method-item">
+              <div key={method.id} title={data.previewMembers?.[method.id] === 'DELETE' ? 'Eliminar método' : undefined} className={`uml-method-item ${data.previewMembers?.[method.id] ? 'acodi-member-preview' : ''} ${data.previewMembers?.[method.id] === 'DELETE' ? 'acodi-deleted' : ''}`}>
                 <span className="vis">{method.visibility}</span> {cleanName}({method.parameters || ''}):{' '}
                 <span className="type">{method.returnType}</span>
               </div>

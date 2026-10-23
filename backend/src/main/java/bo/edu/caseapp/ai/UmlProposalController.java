@@ -14,6 +14,7 @@ public class UmlProposalController {
   private final UmlProposalService service;
   private final UmlProposalApplication application;
   private final UmlProposalDecisions decisions;
+  @org.springframework.beans.factory.annotation.Autowired private UmlCanvasProposalState canvas;
   public UmlProposalController(UmlProposalStore store,UmlProposalService service,UmlProposalApplication application,UmlProposalDecisions decisions) {
     this.store=store; this.service=service; this.application=application; this.decisions=decisions;
   }
@@ -25,6 +26,15 @@ public class UmlProposalController {
     return store.generation(projectId,diagramId,id,auth.getName());
   }
   @GetMapping("/{id}") public UmlProposalStore.View get(@PathVariable UUID projectId,@PathVariable UUID diagramId,@PathVariable UUID id,Authentication auth) { return store.get(projectId,diagramId,id,auth.getName()); }
+  @GetMapping("/canvas") public CanvasView canvas(@PathVariable UUID projectId,@PathVariable UUID diagramId,Authentication auth) {
+    UUID active=canvas.active(projectId,diagramId,auth.getName());
+    return new CanvasView(active==null?null:store.get(projectId,diagramId,active,auth.getName()),
+        store.pendingShared(projectId,diagramId,auth.getName()));
+  }
+  @PostMapping("/{id}/canvas") public CanvasView select(@PathVariable UUID projectId,@PathVariable UUID diagramId,@PathVariable UUID id,Authentication auth) {
+    canvas.select(projectId,diagramId,id,auth.getName());return canvas(projectId,diagramId,auth);
+  }
+  public record CanvasView(UmlProposalStore.View active,List<UmlProposalStore.View> pending) { }
   @PostMapping("/{id}/apply") public UmlProposalStore.View apply(@PathVariable UUID projectId,@PathVariable UUID diagramId,@PathVariable UUID id,
       @Valid @RequestBody UmlProposalExecutor.Apply request,Authentication auth) { return application.apply(projectId,diagramId,id,auth.getName(),request); }
   @PostMapping("/{id}/reject") public UmlProposalStore.View reject(@PathVariable UUID projectId,@PathVariable UUID diagramId,@PathVariable UUID id,Authentication auth) { return decisions.reject(projectId,diagramId,id,auth.getName()); }

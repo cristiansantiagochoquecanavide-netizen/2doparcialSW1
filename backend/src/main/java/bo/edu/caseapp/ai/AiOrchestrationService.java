@@ -115,6 +115,12 @@ public class AiOrchestrationService {
     return response;
   }
 
+  @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+  public LlmResponse generatePreparedChannel(String email,UUID projectId,UUID diagramId,String context,String instructions,List<LlmMessage> messages,int maxTokens) {
+    contexts.authorize(email,projectId,diagramId);
+    return generateContext(AiOperation.AI_CONVERSATION_GROUP,instructions,messages,maxTokens,0.3,context,System.nanoTime());
+  }
+
   private String safeModel(String model) {
     return model == null ? provider.getModelName() : model.replaceAll("[^A-Za-z0-9._/-]", "_");
   }

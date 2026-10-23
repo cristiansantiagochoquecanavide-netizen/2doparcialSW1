@@ -16,7 +16,8 @@ import {
   BaseEdge,
   StepEdge,
   EdgeLabelRenderer,
-  type EdgeProps
+  type EdgeProps,
+  type ReactFlowInstance
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -46,6 +47,10 @@ import { WorkspaceChrome } from './WorkspaceChrome'
 import { ConfirmModal } from './ConfirmModal'
 import { SparklesIcon, CodeIcon, ExchangeIcon } from './icons'
 import { normalizePendingOperations, replayPendingQueue, snapshotContentMatches, type OfflineAction } from './offlineQueue.mjs'
+import { useCanvasProposal } from './useCanvasProposal'
+import { CanvasProposalBar } from './CanvasProposalBar'
+import { projectCanvasProposal, greenPreviewEdge, overlayCanvasGraph, affectedPreviewNodeIds } from './canvasProposalPreview.mjs'
+import './canvas-proposal.css'
 
 const base = import.meta.env.VITE_API_BASE_URL !== undefined ? import.meta.env.VITE_API_BASE_URL : ''
 const NODE_TYPES = { umlClass: UmlClassNode }
@@ -413,14 +418,21 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   const [diagram, setDiagram] = useState<DiagramSummary | null>(null)
   const [elementsRaw, setElementsRaw] = useState<ElementDetail[]>([])
   const [relationsRaw, setRelationsRaw] = useState<RelationDetail[]>([])
+  const [loadedBaseDiagramId, setLoadedBaseDiagramId] = useState('')
 
   const [nodes, setNodes, onNodesChange] = useNodesState<UmlNodeType>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
+  const flowInstance = useRef<ReactFlowInstance<UmlNodeType, Edge> | null>(null)
 
   const [savingStatus, setSavingStatus] = useState<string>('Guardado')
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine)
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false)
   const [pendingQueueCount, setPendingQueueCount] = useState<number>(0)
+  const canvasProposal = useCanvasProposal({ apiBase: base, projectId: project.id, diagramId: diagram?.id || '', token: auth.token }, project.role, async () => {
+    if (!diagram || getOfflineQueue(diagram.id).length > 0) return
+    const full = await request<DiagramFullView>(`/api/projects/${project.id}/diagrams/${diagram.id}`, auth.token)
+    handleFullDiagramUpdated(full)
+  })
 
   // Modales
   const [editingElement, setEditingElement] = useState<ElementDetail | null>(null)
@@ -801,6 +813,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
   const handleFullDiagramUpdated = useCallback(
     (full: DiagramFullView) => {
+      setLoadedBaseDiagramId(full.diagram.id)
       setDiagram(full.diagram)
       setElementsRaw(full.elements)
       setRelationsRaw(full.relations)
@@ -976,6 +989,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   useEffect(() => {
     let isMounted = true
     async function init() {
+      setLoadedBaseDiagramId('')
       try {
         setSavingStatus('Cargando...')
         if (!navigator.onLine) {
@@ -984,6 +998,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
             const cached = loadLocalDiagramSnapshot(cachedDiagramId)
             if (cached && isMounted) {
               setDiagram(cached.diagram)
+              setLoadedBaseDiagramId(cachedDiagramId)
               setElementsRaw(cached.elements)
               setRelationsRaw(cached.relations)
               setPendingQueueCount(getOfflineQueue(cachedDiagramId).length)
@@ -1008,6 +1023,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         if (!isMounted) return
         setElementsRaw(full.elements)
         setRelationsRaw(full.relations)
+        setLoadedBaseDiagramId(def.id)
         saveServerDiagramSnapshot(def.id, full)
         saveLocalDiagramSnapshot(def.id, def, full.elements, full.relations)
         setPendingQueueCount(getOfflineQueue(def.id).length)
@@ -1023,6 +1039,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           const cached = loadLocalDiagramSnapshot(cachedDiagramId)
           if (cached) {
             setDiagram(cached.diagram)
+            setLoadedBaseDiagramId(cachedDiagramId)
             setElementsRaw(cached.elements)
             setRelationsRaw(cached.relations)
             setPendingQueueCount(getOfflineQueue(cachedDiagramId).length)
@@ -1062,11 +1079,16 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
         ws.onopen = () => {
           if (!isDestroyed) setWsConnected(true)
+          window.dispatchEvent(new CustomEvent('case:canvas-proposal', { detail: { diagramId: currentDiagramId } }))
         }
 
         ws.onmessage = async (event) => {
           try {
             const data = JSON.parse(event.data)
+            if (isDestroyed || data.diagramId !== currentDiagramId) return
+            if (data.type === 'UML_PROPOSAL_CHANGED') {
+              window.dispatchEvent(new CustomEvent('case:canvas-proposal', { detail: data })); return
+            }
             if (data.diagramId === currentDiagramId && navigator.onLine && getOfflineQueue(currentDiagramId).length === 0) {
               const full = await request<DiagramFullView>(
                 `/api/projects/${project.id}/diagrams/${currentDiagramId}`,
@@ -1179,7 +1201,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           active.tagName === 'SELECT' ||
           (active as HTMLElement).isContentEditable)
 
-      if (isInput) return
+      if (isInput || canvasProposal.active) return
 
       // Ctrl + A o Cmd + A: Seleccionar todas las clases dentro del lienzo
       if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
@@ -1201,7 +1223,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleDeleteSelected, setNodes])
+  }, [handleDeleteSelected, setNodes, canvasProposal.active])
 
   // Al finalizar de arrastrar uno o varios nodos seleccionados, persistir coordenadas juntas (con soporte Offline)
   const handleNodeDragStop = useCallback(
@@ -1846,6 +1868,20 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   }
 
   const selectedCount = useMemo(() => nodes.filter((n) => n.selected).length, [nodes])
+  // A render-only projection: canonical nodes/raw entities and offline snapshots stay untouched.
+  const previewGraph = useMemo(() => {
+    if (!canvasProposal.active || loadedBaseDiagramId !== diagram?.id
+      || elementsRaw.some(el => !nodes.some(node => node.id === el.id))
+      || relationsRaw.some(rel => !edges.some(edge => edge.id === rel.id))) return { nodes, edges }
+    const projected = projectCanvasProposal(elementsRaw, relationsRaw, canvasProposal.active, canvasProposal.active.scope === 'PRIVATE')
+    return overlayCanvasGraph(nodes, edges,
+      buildNodes(projected.elements.filter(el => projected.marks[el.id]), nodes).map(node => ({ ...node, data: { ...node.data, readOnly: true, previewKind: projected.marks[node.id].kind, previewMembers: projected.marks[node.id].members, previewFields: projected.marks[node.id].fields } })),
+      buildEdges(projected.relations, projected.elements).filter(edge => projected.relationMarks[edge.id]).map(edge => greenPreviewEdge(edge, projected.relationMarks[edge.id])))
+  }, [nodes, edges, elementsRaw, relationsRaw, canvasProposal.active, buildNodes, buildEdges, loadedBaseDiagramId, diagram?.id])
+  function focusProposalChanges() {
+    const ids = affectedPreviewNodeIds(canvasProposal.active, previewGraph.nodes, previewGraph.edges)
+    if (ids.length) void flowInstance.current?.fitView({ nodes: ids.map(id => ({ id })), padding: 0.4, maxZoom: 1.2, duration: 350 })
+  }
   const selectedNodeId = nodes.find((node) => node.selected)?.id
   const selectedEdgeId = edges.find((edge) => edge.selected)?.id
   const selectedElement = selectedNodeId ? elementsRaw.find((element) => element.id === selectedNodeId) ?? null : null
@@ -2055,7 +2091,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       {/* Contenedor React Flow con Selección Múltiple y Expansión Manual del Lienzo */}
       <div
         ref={viewportRef}
-        className={`uml-canvas-viewport ${isResizingCanvas ? 'is-resizing-canvas' : ''}`}
+        className={`uml-canvas-viewport ${isResizingCanvas ? 'is-resizing-canvas' : ''} ${canvasProposal.active ? 'acodi-preview-active' : ''}`}
         style={
           canvasCustomSize.width && canvasCustomSize.height
             ? {
@@ -2074,20 +2110,26 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
               }
         }
       >
+        <CanvasProposalBar key={canvasProposal.active?.id || 'none'} active={canvasProposal.active} pending={canvasProposal.pending}
+          editable={!isReadOnly && isOnline && pendingQueueCount === 0} busy={canvasProposal.busy} error={canvasProposal.error}
+          stale={Boolean(canvasProposal.active && (canvasProposal.active.status === 'CONFLICTO' || canvasProposal.active.baseRevision !== diagram?.revision))}
+          onSelect={canvasProposal.select} onApprove={canvasProposal.approve} onReject={canvasProposal.reject} onRegenerate={canvasProposal.regenerate} onFocus={focusProposalChanges} />
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={handleConnect}
-          onReconnect={handleReconnect}
-          onNodeDragStop={handleNodeDragStop}
-          onEdgeClick={handleEdgeClick}
+          onInit={instance => { flowInstance.current = instance }}
+          nodes={previewGraph.nodes}
+          edges={previewGraph.edges}
+          onNodesChange={canvasProposal.active ? undefined : onNodesChange}
+          onEdgesChange={canvasProposal.active ? undefined : onEdgesChange}
+          onConnect={canvasProposal.active ? undefined : handleConnect}
+          onReconnect={canvasProposal.active ? undefined : handleReconnect}
+          onNodeDragStop={canvasProposal.active ? undefined : handleNodeDragStop}
+          onEdgeClick={canvasProposal.active ? undefined : handleEdgeClick}
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
-          nodesDraggable={!isReadOnly}
-          nodesConnectable={!isReadOnly}
-          edgesReconnectable={!isReadOnly}
+          nodesDraggable={!isReadOnly && !canvasProposal.active}
+          nodesConnectable={!isReadOnly && !canvasProposal.active}
+          edgesReconnectable={!isReadOnly && !canvasProposal.active}
+          deleteKeyCode={canvasProposal.active ? null : 'Backspace'}
           elementsSelectable={true}
           selectionOnDrag={true}
           selectionMode={SelectionMode.Partial}

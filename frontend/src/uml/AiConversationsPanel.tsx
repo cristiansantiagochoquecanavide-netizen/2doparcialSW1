@@ -10,7 +10,7 @@ type Conversation = { id: string; scope: Scope; title: string; diagramId: string
 type Message = { id: string; clientMessageId: string | null; senderType: 'USER' | 'AGENT'; senderName: string; recipientName: string | null; content: string; status: 'PENDING' | 'COMPLETED' | 'ERROR'; errorCode: string | null; createdAt: string; replyToMessageId: string | null }
 type Page = { messages: Message[]; nextCursor: string | null; hasMore: boolean }
 type Memory = { projectMemory: { systemName: string | null; systemDescription: string | null; businessDomain: string | null; objectives: string | null; additionalContext: string | null } | null; entries: { id: string; entryType: string; confidenceScope: string; content: string; diagramId: string | null }[] }
-type Props = { projectId: string; diagramId: string | null; token: string; currentUser: { name: string; email: string; role: string }; active?: boolean }
+type Props = { projectId: string; diagramId: string | null; token: string; currentUser: { name: string; email: string; role: string }; active?: boolean; chatOnly?: boolean }
 const apiBase = import.meta.env.VITE_API_BASE_URL || ''
 const entryLabels: Record<string,string> = { SYSTEM_CONTEXT: 'Contexto del sistema', BUSINESS_RULE: 'Regla de negocio', FUNCTIONAL_CONSTRAINT: 'Restricción funcional', ARCHITECTURE_DECISION: 'Decisión arquitectónica', MODELING_CONVENTION: 'Convención de modelado', ADDITIONAL: 'Información adicional' }
 
@@ -27,20 +27,23 @@ async function api<T>(path: string, token: string, init: RequestInit = {}): Prom
   return response.json() as Promise<T>
 }
 
-export function AiConversationsPanel({ projectId, diagramId, token, currentUser, active = true }: Props) {
+export function AiConversationsPanel({ projectId, diagramId, token, currentUser, active = true, chatOnly = false }: Props) {
   const speech = useAgentSpeech()
   const base = `/api/projects/${projectId}/ai`
   const [scope, setScope] = useState<Scope>('GROUP')
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState('')
-  useEffect(() => { speech.view({ conversationId: activeId, scope, active }); return () => speech.view({ conversationId: '', scope, active: false }) }, [activeId, scope, active, speech.view])
+  useEffect(() => { if (!active) return; speech.view({ conversationId: activeId, scope, active }); return () => speech.view({ conversationId: '', scope, active: false }) }, [activeId, scope, active, speech.view])
   const activeKey = useRef('')
   const speechSources = useRef(new Map<string, { projectId: string; conversationId: string; scope: Scope }>())
   activeKey.current = projectId + ':' + activeId
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messageHistory, setMessages] = useState<Message[]>([])
+  const [historyId, setHistoryId] = useState('')
   const [cursor, setCursor] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [input, setInput] = useState('')
+  const conversationDrafts = useRef(new Map<string, string>()), lastDraftId = useRef(''), inputRef = useRef(input)
+  inputRef.current = input
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [memory, setMemory] = useState<Memory | null>(null)
@@ -50,6 +53,13 @@ export function AiConversationsPanel({ projectId, diagramId, token, currentUser,
   const [contextSaved, setContextSaved] = useState(false)
   const [draft, setDraft] = useState({ systemName: '', systemDescription: '', businessDomain: '', objectives: '', additionalContext: '' })
   const visibleConversations = useMemo(() => conversations.filter((item) => item.scope === scope), [conversations, scope])
+  const conversationReady = historyId === activeId && conversations.some(item => item.id === activeId && item.scope === scope)
+  const messages = conversationReady ? messageHistory : []
+  useEffect(() => {
+    conversationDrafts.current.set(lastDraftId.current, inputRef.current)
+    lastDraftId.current = activeId; setInput(conversationDrafts.current.get(activeId) || '')
+  }, [activeId])
+  useEffect(() => { conversationDrafts.current.clear(); lastDraftId.current = '' }, [projectId, token])
 
   async function loadList(selectId?: string) {
     const list = await api<Conversation[]>(base + '/conversations', token)
@@ -64,6 +74,7 @@ export function AiConversationsPanel({ projectId, diagramId, token, currentUser,
     const conversation = conversations.find(item => item.id === id)
     if (conversation) page.messages.forEach(message => speechSources.current.set(message.id, { projectId, conversationId: id, scope: conversation.scope }))
     setMessages((old) => before ? [...page.messages, ...old] : page.messages)
+    setHistoryId(id)
     setCursor(page.nextCursor); setHasMore(page.hasMore)
   }
   function playResponse(message: Message) {
@@ -84,26 +95,27 @@ export function AiConversationsPanel({ projectId, diagramId, token, currentUser,
       const frame = (event as CustomEvent<{ projectId?: string; conversationId?: string; message?: Message }>).detail
       if (frame?.projectId !== projectId) return
       if (frame?.conversationId && frame.message) speechSources.current.set(frame.message.id, { projectId, conversationId: frame.conversationId, scope: 'GROUP' })
-      if (scope === 'GROUP' && frame?.conversationId === activeId && frame.message) setMessages((old) => old.some((item) => item.id === frame.message!.id) ? old.map(item => item.id === frame.message!.id ? frame.message! : item) : [...old, frame.message!])
+      if (scope === 'GROUP' && frame?.conversationId === activeId && frame.message && historyId === activeId) setMessages((old) => old.some((item) => item.id === frame.message!.id) ? old.map(item => item.id === frame.message!.id ? frame.message! : item) : [...old, frame.message!])
       if (frame?.conversationId && !conversations.some(item => item.id === frame.conversationId)) void loadList().catch(() => undefined)
     }
     window.addEventListener('case:ai-message', onMessage)
     return () => window.removeEventListener('case:ai-message', onMessage)
-  }, [activeId, scope, conversations, base, token])
+  }, [activeId, scope, conversations, base, token, historyId])
   async function createConversation() {
     setBusy(true); setError('')
     try { const created = await api<Conversation>(base + '/conversations', token, { method: 'POST', body: JSON.stringify({ scope, diagramId, title: scope === 'GROUP' ? 'Conversación grupal' : 'Conversación privada' }) }); await loadList(created.id) }
     catch (e) { setError(e instanceof Error ? e.message : 'No se pudo crear la conversación.') } finally { setBusy(false) }
   }
   async function send(event: FormEvent) {
-    event.preventDefault(); const content = input.trim(); if (!content || !activeId || busy) return
+    event.preventDefault(); const content = input.trim(); if (!content || !activeId || busy || !conversationReady) return
     const clientMessageId = crypto.randomUUID(); setBusy(true); setError(''); setInput('')
     const optimistic: Message = { id: clientMessageId, clientMessageId, senderType: 'USER', senderName: currentUser.name, recipientName: null, content, status: 'PENDING', errorCode: null, createdAt: new Date().toISOString(), replyToMessageId: null }
     setMessages((old) => [...old, optimistic])
     try {
-      const turn = await api<{ question: Message; answer: Message | null }>(`${base}/conversations/${activeId}/messages`, token, { method: 'POST', body: JSON.stringify({ clientMessageId, content }) })
+      const turn = await api<{ question: Message; answer: Message | null; proposalId?: string | null }>(`${base}/conversations/${activeId}/messages`, token, { method: 'POST', body: JSON.stringify({ clientMessageId, content }) })
       if (activeKey.current !== projectId + ':' + activeId) return
       if (turn.answer) speechSources.current.set(turn.answer.id, { projectId, conversationId: activeId, scope })
+      if (turn.proposalId && scope === 'PRIVATE') window.dispatchEvent(new CustomEvent('case:canvas-private-proposal', { detail: { projectId, diagramId, proposalId: turn.proposalId } }))
       setMessages((old) => [...old.filter((item) => item.id !== optimistic.id && item.id !== turn.question.id && (!turn.answer || item.id !== turn.answer.id)), turn.question, ...(turn.answer ? [turn.answer] : [])])
     } catch (e) { setMessages((old) => old.map((item) => item.id === clientMessageId ? { ...item, status: 'ERROR', errorCode: 'REQUEST_FAILED' } : item)); setError(e instanceof Error ? e.message : 'No se pudo consultar al agente.') }
     finally { setBusy(false) }
@@ -126,15 +138,16 @@ export function AiConversationsPanel({ projectId, diagramId, token, currentUser,
     await loadMemory(); setContextSaved(true)
   }
 
-  return <div className="ai-conversations">
-    {diagramId && <UmlProposalsPanel projectId={projectId} diagramId={diagramId} conversationId={activeId} token={token} role={currentUser.role} active={active} refreshKey={messages.map(message => message.id + message.status).join(':')} />}
-    <AiProactivePanel projectId={projectId} diagramId={diagramId} token={token} role={currentUser.role} active={active} onDescribe={() => { setMemoryOpen(true); void loadMemory().catch(e => setError(e.message)) }} onOpenConversation={(id) => { setScope('GROUP'); void loadList(id).catch(e => setError(e.message)) }} />
-    <div className="ai-scope-tabs"><button className={scope === 'GROUP' ? 'active' : ''} onClick={() => setScope('GROUP')}>Grupales</button><button className={scope === 'PRIVATE' ? 'active' : ''} onClick={() => setScope('PRIVATE')}>Privadas</button><button className="ai-new" disabled={busy} onClick={() => void createConversation()}>＋ Nuevo chat</button></div>
-    <div className="ai-conversation-layout"><nav className="ai-conversation-list">{visibleConversations.map((item) => <div className={'ai-conversation-item' + (activeId === item.id ? ' active' : '')} key={item.id}><button onClick={() => setActiveId(item.id)}>{item.title}<small>{new Intl.DateTimeFormat('es-BO', { dateStyle: 'short' }).format(new Date(item.updatedAt))}</small></button><button title="Renombrar" onClick={() => void rename(item)}>⋯</button><button title="Archivar" onClick={() => void archive(item)}>×</button></div>)}{visibleConversations.length === 0 && <p className="ai-empty">Crea una conversación para empezar. No consume IA hasta enviar un mensaje.</p>}</nav>
-      <section className="ai-conversation-main"><div className="ai-context-toolbar"><span>{scope === 'GROUP' ? 'Visible para miembros autorizados' : 'Privada para ti'}</span><button onClick={() => void toggleMemory()}>{memoryOpen ? 'Cerrar contexto' : 'Contexto del proyecto'}</button></div>
+  return <div className={'ai-conversations' + (chatOnly ? ' ai-chat-only' : '')}>
+    {!chatOnly && diagramId && <UmlProposalsPanel projectId={projectId} diagramId={diagramId} conversationId={activeId} token={token} role={currentUser.role} active={active} refreshKey={messages.map(message => message.id + message.status).join(':')} />}
+    {!chatOnly && <AiProactivePanel projectId={projectId} diagramId={diagramId} token={token} role={currentUser.role} active={active} onDescribe={() => { setMemoryOpen(true); void loadMemory().catch(e => setError(e.message)) }} onOpenConversation={(id) => { setScope('GROUP'); void loadList(id).catch(e => setError(e.message)) }} />}
+    <div className="ai-scope-tabs">{chatOnly ? <select aria-label="Ámbito de conversación" value={scope} onChange={e => setScope(e.target.value as Scope)}><option value="GROUP">Historiales grupales</option><option value="PRIVATE">Chats privados</option></select> : <><button className={scope === 'GROUP' ? 'active' : ''} onClick={() => setScope('GROUP')}>Grupales</button><button className={scope === 'PRIVATE' ? 'active' : ''} onClick={() => setScope('PRIVATE')}>Privadas</button></>}<button className="ai-new" disabled={busy} onClick={() => void createConversation()}>＋ Nuevo chat</button></div>
+    {chatOnly && <div className="ai-chat-picker"><select aria-label="Conversación de ACODI" value={activeId} onChange={e => setActiveId(e.target.value)}><option value="" disabled>Selecciona una conversación</option>{visibleConversations.map(item => <option key={item.id} value={item.id}>{item.title} · {new Date(item.updatedAt).toLocaleDateString('es-BO')}</option>)}</select><button disabled={!activeId} onClick={() => { const item=conversations.find(c=>c.id===activeId);if(item)void rename(item) }}>Renombrar</button><button disabled={!activeId} onClick={() => { const item=conversations.find(c=>c.id===activeId);if(item)void archive(item) }}>Archivar</button></div>}
+    <div className="ai-conversation-layout">{!chatOnly && <nav className="ai-conversation-list">{visibleConversations.map((item) => <div className={'ai-conversation-item' + (activeId === item.id ? ' active' : '')} key={item.id}><button onClick={() => setActiveId(item.id)}>{item.title}<small>{new Intl.DateTimeFormat('es-BO', { dateStyle: 'short' }).format(new Date(item.updatedAt))}</small></button><button title="Renombrar" onClick={() => void rename(item)}>⋯</button><button title="Archivar" onClick={() => void archive(item)}>×</button></div>)}{visibleConversations.length === 0 && <p className="ai-empty">Crea una conversación para empezar. No consume IA hasta enviar un mensaje.</p>}</nav>}
+      <section className="ai-conversation-main"><div className="ai-context-toolbar"><span>{scope === 'GROUP' ? 'Visible para miembros autorizados' : 'Privada para ti'}</span>{!chatOnly && <button onClick={() => void toggleMemory()}>{memoryOpen ? 'Cerrar contexto' : 'Contexto del proyecto'}</button>}</div>
         {memoryOpen && <form className="ai-memory-editor" onSubmit={(e) => void saveMemory(e)}><strong>Memoria compartida confirmada</strong><AiContextDictation disabled={!canEditSharedContext(currentUser.role)} active={active && memoryOpen} onConfirm={saveDictatedContext} />{(['systemName', 'systemDescription', 'businessDomain', 'objectives', 'additionalContext'] as const).map((key) => <label key={key}>{({ systemName: 'Nombre del sistema', systemDescription: 'Descripción', businessDomain: 'Dominio', objectives: 'Objetivos', additionalContext: 'Información adicional' })[key]}<textarea value={draft[key]} maxLength={key === 'systemName' ? 160 : key === 'businessDomain' ? 1000 : key === 'systemDescription' ? 4000 : 12000} rows={key === 'systemName' ? 1 : 2} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} disabled={!canEditSharedContext(currentUser.role)} /></label>)}<button disabled={contextSaving || !canEditSharedContext(currentUser.role)}>{contextSaving ? 'Guardando…' : contextSaved ? 'Guardado' : 'Guardar contexto'}</button>{memory?.entries.map((entry) => <p key={entry.id}><strong>{entryLabels[entry.entryType] || 'Contexto'} · {entry.confidenceScope === 'INFERRED' ? 'Hipótesis por confirmar' : 'Confirmado'}</strong> · {entry.content} <button type="button" disabled={!canEditSharedContext(currentUser.role)} onClick={() => void editEntry(entry)}>{entry.confidenceScope === 'INFERRED' ? 'Revisar y confirmar' : 'Editar'}</button></p>)}<label>Agregar regla confirmada<textarea value={rule} onChange={(e) => setRule(e.target.value)} maxLength={4000} /></label><button type="button" disabled={!rule.trim() || !canEditSharedContext(currentUser.role)} onClick={() => void saveRule()}>Agregar regla</button></form>}
-        <div className="ai-conversation-messages">{hasMore && <button className="ai-load-more" onClick={() => cursor && activeId && void loadHistory(activeId, cursor)}>Cargar mensajes anteriores</button>}{messages.map((message) => <article key={message.id} className={'ai-message ' + (message.senderType === 'USER' ? 'own' : 'agent')}><header><strong>{message.senderType === 'AGENT' ? `Agente CASE IA · ${message.recipientName || 'Equipo'}` : message.senderName}</strong><time>{new Intl.DateTimeFormat('es-BO', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' }).format(new Date(message.createdAt))}</time></header><p>{message.content}</p>{message.senderType === 'AGENT' && message.status === 'COMPLETED' && <button type="button" disabled={!speech.state.available || speech.state.microphoneActive || !speechSources.current.has(message.id) || (scope === 'PRIVATE' && speech.state.roomConnected)} title={scope === 'PRIVATE' ? 'Lectura privada local; sal de la sala para reproducirla.' : 'Reproducir localmente esta respuesta escrita'} onClick={() => playResponse(message)}>Reproducir respuesta</button>}{message.status === 'PENDING' && <small>El agente está respondiendo…</small>}{message.status === 'ERROR' && <><small role="alert">No se obtuvo respuesta ({message.errorCode || 'error'}).</small><button disabled={busy} onClick={() => void retry(message)}>Reintentar</button></>}</article>)}{!activeId && <p className="ai-empty">Selecciona o crea una conversación.</p>}</div>
-        {error && <div className="ai-error" role="alert">{error}<button onClick={() => setError('')}>×</button></div>}<form className="ai-compose" onSubmit={(e) => void send(e)}><textarea value={input} onChange={(e) => setInput(e.target.value)} maxLength={8000} rows={2} disabled={!activeId || busy} placeholder="Pregunta sobre el sistema o el diagrama…" /><button disabled={!activeId || !input.trim() || busy}>{busy ? 'Consultando…' : 'Enviar'}</button></form>
+        <div className="ai-conversation-messages">{hasMore && <button className="ai-load-more" onClick={() => cursor && activeId && void loadHistory(activeId, cursor)}>Cargar mensajes anteriores</button>}{messages.map((message) => <article key={message.id} className={'ai-message ' + (message.senderType === 'USER' ? 'own' : 'agent')}><header><strong>{message.senderType === 'AGENT' ? `ACODI · ${message.recipientName || 'Equipo'}` : message.senderName}</strong><time>{new Intl.DateTimeFormat('es-BO', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' }).format(new Date(message.createdAt))}</time></header><p>{message.content}</p>{message.senderType === 'AGENT' && message.status === 'COMPLETED' && <button type="button" disabled={!speech.state.available || speech.state.microphoneActive || !speechSources.current.has(message.id) || (scope === 'PRIVATE' && speech.state.roomConnected)} title={scope === 'PRIVATE' ? 'Lectura privada local; sal de la sala para reproducirla.' : 'Reproducir localmente esta respuesta escrita'} onClick={() => playResponse(message)}>Reproducir respuesta</button>}{message.status === 'PENDING' && <small>El agente está respondiendo…</small>}{message.status === 'ERROR' && <><small role="alert">No se obtuvo respuesta ({message.errorCode || 'error'}).</small><button disabled={busy} onClick={() => void retry(message)}>Reintentar</button></>}</article>)}{!activeId && <p className="ai-empty">Selecciona o crea una conversación.</p>}</div>
+        {error && <div className="ai-error" role="alert">{error}<button onClick={() => setError('')}>×</button></div>}<form className="ai-compose" onSubmit={(e) => void send(e)}><textarea value={conversationReady ? input : ''} onChange={(e) => setInput(e.target.value)} maxLength={8000} rows={2} disabled={!activeId || busy || !conversationReady} placeholder="Pregunta sobre el sistema o el diagrama…" /><button disabled={!activeId || !input.trim() || busy || !conversationReady}>{busy ? 'Consultando…' : 'Enviar'}</button></form>
       </section></div>
   </div>
 }

@@ -79,6 +79,9 @@ class UmlProposalEngineTest {
     assertEquals(UmlProposalIntent.Intent.DISCUSS,UmlProposalIntent.classify("Estamos diseñando un hospital"));
     assertEquals(UmlProposalIntent.Intent.DECIDE,UmlProposalIntent.classify("Sí, aplica la propuesta"));
     assertEquals(UmlProposalIntent.Intent.DECIDE,UmlProposalIntent.classify("dale"));
+    for(String text:List.of("@ACODI ¿Puedes eliminar la relación entre Venta y Producto?","Hola @ACODI, quiero que elimines la relación detalle","Me podrías quitar la asociación detalle","Por favor borra el método pagar de Venta","Necesito agregar el atributo metodoPago a Venta","Quiero crear una relación"))
+      assertEquals(UmlProposalIntent.Intent.PREPARE,UmlProposalIntent.classify(text),text);
+    assertEquals(UmlProposalIntent.Intent.DISCUSS,UmlProposalIntent.classify("No elimines la relación entre Venta y Producto"));
   }
   @Test void updatesAndDeletesMethodsUsingStableIds() throws Exception {
     UUID method=UUID.randomUUID();

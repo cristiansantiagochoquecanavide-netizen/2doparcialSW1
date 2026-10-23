@@ -23,6 +23,7 @@ public class UmlProposalExecutor {
   private final JdbcTemplate jdbc;
   private final AiConversationStore conversations;
   @PersistenceContext private EntityManager entities;
+  @org.springframework.beans.factory.annotation.Autowired private UmlCanvasProposalState canvas;
   public UmlProposalExecutor(UmlProposalStore store,UmlProposalEngine engine,UmlService uml,ProjectService projects,
       VersionService versions,JdbcTemplate jdbc,AiConversationStore conversations) {
     this.store=store; this.engine=engine; this.uml=uml; this.projects=projects; this.versions=versions; this.jdbc=jdbc; this.conversations=conversations;
@@ -59,6 +60,7 @@ public class UmlProposalExecutor {
           application_key=?,version_id=?,result_code='APPLIED' WHERE id=?
         """,member.getUser().getId(),revision,request.clientRequestId(),version.id(),id);
     store.audit(id,member.getUser().getId(),"APPLIED","APPLIED");
+    canvas.decided(diagramId,id,(String)row.get("scope"));
     if(row.get("conversation_id")!=null) conversations.publishProposalDecision(projectId,(UUID)row.get("conversation_id"),email,"aplicó una propuesta UML",revision);
     return store.get(projectId,diagramId,id,email);
   }

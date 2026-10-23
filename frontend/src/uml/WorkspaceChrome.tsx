@@ -139,7 +139,7 @@ function WorkspaceChromeContent(p: Props) {
               setIsRightPanelCollapsed(false)
             }
           }}
-          title={rightPanelMode === 'team' && !isRightPanelCollapsed ? 'Colapsar espacio de equipo' : 'Abrir espacio colaborativo del equipo (Canales, Chat y Agente IA)'}
+          title={rightPanelMode === 'team' && !isRightPanelCollapsed ? 'Colapsar espacio de equipo' : 'Abrir espacio colaborativo del equipo (Canales, Chat y ACODI)'}
         >
           <ChatIcon size={14} style={{ marginRight: 5, verticalAlign: 'middle' }} />
           Espacio de Equipo
@@ -318,7 +318,7 @@ function WorkspaceChromeContent(p: Props) {
                     type="button"
                     className={`right-tab-btn ${rightPanelMode === 'team' ? 'active' : ''}`}
                     onClick={() => setRightPanelMode('team')}
-                    title="Abrir espacio colaborativo con canales y Agente IA"
+                    title="Abrir espacio colaborativo con canales y ACODI"
                   >
                     <ChatIcon size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} />
                     Espacio de Equipo
