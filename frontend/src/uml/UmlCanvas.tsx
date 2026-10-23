@@ -624,13 +624,11 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       setSavingStatus('Eliminando seleccionados...')
       const headers: Record<string, string> =
         currentDiagram.revision != null ? { 'X-Diagram-Revision': String(currentDiagram.revision) } : {}
-      for (const elementId of selectedIds) {
-        await request(
-          `/api/projects/${project.id}/diagrams/${currentDiagram.id}/elements/${elementId}`,
-          auth.token,
-          { method: 'DELETE', headers }
-        )
-      }
+      await request(
+        `/api/projects/${project.id}/diagrams/${currentDiagram.id}/elements`,
+        auth.token,
+        { method: 'DELETE', headers, body: JSON.stringify({ elementIds: selectedIds }) }
+      )
       setElementsRaw(nextElements)
       setRelationsRaw(nextRelations)
       if (currentDiagram.revision != null) {
@@ -1891,6 +1889,34 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     setShowAi(true)
   }
 
+  async function handleCreateIntermediateClass(relation: RelationDetail) {
+    if (isReadOnly || !diagram) return
+    const name = window.prompt('Nombre de la clase intermedia (por ejemplo, Detalle_Venta):')?.trim()
+    if (!name) return
+    const rawAttributes = window.prompt('Atributos opcionales separados por coma (ejemplo: cantidad: Integer, precio: Double):', '') ?? ''
+    const attributes = rawAttributes.split(',').map(value => value.trim()).filter(Boolean).map(value => {
+      const [attributeName, ...typeParts] = value.split(':')
+      return { nombre: attributeName.trim(), tipo: typeParts.join(':').trim() || 'String' }
+    }).filter(attribute => attribute.nombre)
+    try {
+      setSavingStatus('Creando clase intermedia...')
+      const full = await request<DiagramFullView>(
+        `/api/projects/${project.id}/diagrams/${diagram.id}/relations/${relation.id}/intermediate-class`,
+        auth.token,
+        {
+          method: 'POST',
+          headers: diagram.revision != null ? { 'X-Diagram-Revision': String(diagram.revision) } : {},
+          body: JSON.stringify({ nombre: name, atributos: attributes })
+        }
+      )
+      handleFullDiagramUpdated(full)
+      setSavingStatus('Clase intermedia creada')
+    } catch (err) {
+      setSavingStatus(err instanceof Error ? err.message : 'No se pudo crear la clase intermedia.')
+      onError(err)
+    }
+  }
+
   return (
     <>
     <WorkspaceChrome
@@ -1904,6 +1930,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       onEditRelation={setEditingRelation} onRelationType={setPendingRelationType} onValidate={handleValidateDiagram} onRelational={handleGenerateRelational}
       onAi={(mode) => { setAiInitialMode(mode || 'command'); setShowAi(true) }} onGenerator={() => setShowGenerator(true)} onVersions={() => setShowVersions(true)}
       onExchange={() => setShowXmi(true)} onApiTester={() => setShowApiTester(true)} onDeleteSelected={handleDeleteSelected}
+      onCreateIntermediateClass={handleCreateIntermediateClass}
       selectedCount={selectedCount} onSelectAll={() => setNodes(prev => prev.map(node => ({ ...node, selected: true })))}
       onDeselectAll={() => setNodes(prev => prev.map(node => ({ ...node, selected: false })))}
     >

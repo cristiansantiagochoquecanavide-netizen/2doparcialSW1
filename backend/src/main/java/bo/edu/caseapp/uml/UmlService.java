@@ -373,6 +373,23 @@ public class UmlService {
     notifyCollab(diagramId, "ELEMENT_DELETED", newRev);
   }
 
+  public void deleteElements(UUID projectId, UUID diagramId, String email, List<UUID> elementIds, Long expectedRevision) {
+    projectService.requireCanEdit(projectId, email);
+    DiagramaClase diagram = findDiagram(projectId, diagramId);
+    requireNotLocked(diagram, email);
+    List<UUID> uniqueIds = elementIds == null ? List.of() : elementIds.stream().filter(Objects::nonNull).distinct().toList();
+    if (uniqueIds.isEmpty()) throw new BadRequestException("Selecciona al menos una clase para eliminar.");
+    List<ElementoUML> selected = elements.findAllById(uniqueIds);
+    if (selected.size() != uniqueIds.size() || selected.stream().anyMatch(element -> !element.getDiagrama().getId().equals(diagramId))) {
+      throw new BadRequestException("Una o más clases seleccionadas no pertenecen a este diagrama.");
+    }
+    long newRev = reserveNextRevision(diagramId, expectedRevision);
+    diagram.setRevision(newRev);
+    for (UUID elementId : uniqueIds) relations.deleteByElementoOrigenIdOrElementoDestinoId(elementId, elementId);
+    elements.deleteAll(selected);
+    notifyCollab(diagramId, "ELEMENTS_DELETED", newRev);
+  }
+
   public RelationDetail saveRelation(UUID projectId, UUID diagramId, String email, SaveRelation request) {
     return saveRelation(projectId, diagramId, email, request,
         request.id() == null ? SaveMode.CREATE : SaveMode.UPDATE);
@@ -389,6 +406,49 @@ public class UmlService {
     return saveRelation(projectId, diagramId, email,
         new SaveRelation(relationId, request.elementoOrigen(), request.elementoDestino(), request.nombreRelacion(),
             request.tipoRelacion(), request.multiplicidadOrigen(), request.multiplicidadDestino(), request.expectedRevision()), SaveMode.UPDATE);
+  }
+
+  public DiagramFullView createIntermediateClass(UUID projectId, UUID diagramId, String email, UUID relationId,
+      CreateIntermediateClass request, Long expectedRevision) {
+    long revision = expectedRevision != null ? expectedRevision : getDiagramRevision(diagramId);
+    return mutateBatch(projectId, diagramId, email, revision, () -> {
+      RelacionUML relation = relations.findById(relationId)
+          .orElseThrow(() -> new NotFoundException("Relación UML no encontrada."));
+      if (!relation.getDiagrama().getId().equals(diagramId))
+        throw new BadRequestException("La relación no pertenece a este diagrama.");
+      if (!isMany(relation.getMultiplicidadOrigen()) || !isMany(relation.getMultiplicidadDestino()))
+        throw new BadRequestException("La clase intermedia solo puede agregarse a una relación muchos a muchos.");
+      if (elements.findByDiagramaId(diagramId).stream().anyMatch(e -> e.getNombre().equalsIgnoreCase(request.nombre().trim())))
+        throw new BadRequestException("Ya existe una clase con ese nombre en el diagrama.");
+
+      var properties = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+      var attributes = properties.putArray("attributes");
+      if (request.atributos() != null) for (IntermediateAttribute attribute : request.atributos()) {
+        String name = attribute.nombre().trim();
+        String type = attribute.tipo().trim();
+        attributes.addObject().put("id", UUID.randomUUID().toString()).put("visibility", "+")
+            .put("name", name).put("type", type);
+      }
+      properties.putArray("methods");
+
+      ElementoUML source = relation.getElementoOrigen();
+      ElementoUML target = relation.getElementoDestino();
+      double x = (source.getPosicionX() + target.getPosicionX()) / 2.0;
+      double y = Math.max(20, (source.getPosicionY() + target.getPosicionY()) / 2.0 - 150.0);
+      ElementDetail middle = createElement(projectId, diagramId, email,
+          new SaveElement(null, TipoElementoUML.CLASE, request.nombre().trim(), x, y, properties.toString(), revision));
+      updateRelation(projectId, diagramId, email, relationId,
+          new SaveRelation(relationId, source.getId(), middle.id(), null, TipoRelacionUML.ASOCIACION, "1", "*", revision));
+      createRelation(projectId, diagramId, email,
+          new SaveRelation(null, target.getId(), middle.id(), null, TipoRelacionUML.ASOCIACION, "1", "*", revision));
+      return getDiagram(projectId, diagramId, email);
+    });
+  }
+
+  private boolean isMany(String multiplicity) {
+    if (multiplicity == null) return false;
+    String value = multiplicity.trim().toLowerCase(Locale.ROOT);
+    return value.equals("*") || value.equals("n") || value.equals("m") || value.matches("(?:0|1)\\.\\.(?:\\*|n|m)");
   }
 
   private RelationDetail saveRelation(UUID projectId, UUID diagramId, String email, SaveRelation request, SaveMode mode) {

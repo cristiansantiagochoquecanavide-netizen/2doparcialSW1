@@ -23,6 +23,8 @@ import bo.edu.caseapp.project.ProjectService;
 import bo.edu.caseapp.uml.*;
 import bo.edu.caseapp.uml.UmlRequests.SaveElement;
 import bo.edu.caseapp.uml.UmlRequests.SaveRelation;
+import bo.edu.caseapp.uml.UmlRequests.CreateIntermediateClass;
+import bo.edu.caseapp.uml.UmlRequests.IntermediateAttribute;
 import bo.edu.caseapp.uml.UmlResponses.DiagramFullView;
 import bo.edu.caseapp.user.User;
 import bo.edu.caseapp.user.UserRepository;
@@ -156,15 +158,48 @@ public class AiAssistantService {
       // Ejemplos: "crear clase Producto", "agrega una clase Pedido", "crea una interfaz IRepositorio"
       Pattern pCrearClase = Pattern.compile("(?i)^(?:crear|crea|nueva|nuevo|agrega|agregar|anadir|anade)\\s+(?:una?\\s+)?(clase(?:\\s+abstracta)?|interfaz|abstracta|enum|enumeracion)\\s+(?:(?:llamada|llamado|de\\s+nombre)\\s+)?([A-Za-z][A-Za-z0-9_]*)(?:\\s+con\\s+(?:atributos|campos)?\\s*(.*))?$");
       Matcher mCrear = pCrearClase.matcher(raw);
-      Pattern pIntermediate = Pattern.compile("(?i)^crear\\s+(?:una?\\s+)?clase\\s+intermedia\\s+([a-zA-Z0-9_]+)\\s+entre\\s+([a-zA-Z0-9_]+)\\s+y\\s+([a-zA-Z0-9_]+)$");
+      Pattern pIntermediate = Pattern.compile("(?i)^(?:crear|crea|agregar|agrega)\\s+(?:una?\\s+)?clase\\s+intermedia\\s+([a-zA-Z0-9_]+)(?:\\s+entre\\s+([a-zA-Z0-9_]+)\\s+y\\s+([a-zA-Z0-9_]+)|\\s+para\\s+la\\s+relacion\\s+seleccionada)?(?:\\s+con\\s+atributos?\\s+(.+))?$");
       Matcher mIntermediate = pIntermediate.matcher(raw);
 
       if (mIntermediate.find()) {
         String middleName = mIntermediate.group(1);
         String leftName = mIntermediate.group(2);
         String rightName = mIntermediate.group(3);
+        List<IntermediateAttribute> middleAttributes = parseIntermediateAttributes(mIntermediate.group(4));
+        List<RelacionUML> currentRelations = relationRepo.findByDiagramaId(diagramId);
+        RelacionUML selectedRelation = null;
+        if (request.selectedRelationId() != null && !request.selectedRelationId().isBlank()) {
+          try {
+            UUID selectedId = UUID.fromString(request.selectedRelationId());
+            selectedRelation = currentRelations.stream().filter(r -> r.getId().equals(selectedId)).findFirst().orElse(null);
+          } catch (IllegalArgumentException ignored) {}
+        }
+        if (selectedRelation == null && leftName != null && rightName != null) {
+          String left = leftName, right = rightName;
+          selectedRelation = currentRelations.stream().filter(r ->
+              (r.getElementoOrigen().getNombre().equalsIgnoreCase(left) && r.getElementoDestino().getNombre().equalsIgnoreCase(right)
+                  || r.getElementoOrigen().getNombre().equalsIgnoreCase(right) && r.getElementoDestino().getNombre().equalsIgnoreCase(left))
+                  && isMany(r.getMultiplicidadOrigen()) && isMany(r.getMultiplicidadDestino())).findFirst().orElse(null);
+        }
+        if (selectedRelation != null && isMany(selectedRelation.getMultiplicidadOrigen()) && isMany(selectedRelation.getMultiplicidadDestino())) {
+          String sourceName = selectedRelation.getElementoOrigen().getNombre();
+          String targetName = selectedRelation.getElementoDestino().getNombre();
+          umlService.createIntermediateClass(projectId, diagramId, email, selectedRelation.getId(),
+              new CreateIntermediateClass(middleName, middleAttributes), expectedRevision);
+          actionType = "CREAR_CLASE_INTERMEDIA";
+          message = "Se convirtió la relación muchos a muchos entre «" + sourceName + "» y «" + targetName
+              + "» en la clase intermedia «" + middleName + "».";
+          success = true;
+        } else {
+          if (leftName == null || rightName == null) {
+            message = "Selecciona una relación muchos a muchos o indica las dos clases: entre ClaseA y ClaseB.";
+          } else {
         ObjectNode middleProps = objectMapper.createObjectNode();
-        middleProps.putArray("attributes");
+        ArrayNode middleAttrs = middleProps.putArray("attributes");
+        for (IntermediateAttribute attribute : middleAttributes) {
+          middleAttrs.addObject().put("id", UUID.randomUUID().toString()).put("visibility", "+")
+              .put("name", attribute.nombre()).put("type", attribute.tipo());
+        }
         middleProps.putArray("methods");
         umlService.saveElement(projectId, diagramId, email,
             new SaveElement(null, TipoElementoUML.CLASE, middleName, 300.0, 150.0, middleProps.toString()));
@@ -182,6 +217,8 @@ public class AiAssistantService {
         actionType = "CREAR_CLASE_INTERMEDIA";
         message = "Se creó la clase intermedia «" + middleName + "» entre «" + leftName + "» y «" + rightName + "».";
         success = true;
+          }
+        }
       } else if (mCrear.find()) {
         String tipoStr = mCrear.group(1).trim().toLowerCase();
         String nombreClase = mCrear.group(2).trim();
@@ -708,10 +745,48 @@ public class AiAssistantService {
         warnings.add("No se creó la relación «" + relation.source() + " → " + relation.target() + "» porque falta un elemento en el diagrama.");
         continue;
       }
-      String key = relationKey(sourceId, targetId, relation.type());
-      if (!existingRelationKeys.add(key)) { warnings.add("No se duplicó la relación «" + relation.source() + " → " + relation.target() + "."); continue; }
-      umlService.saveRelation(projectId, diagramId, email, new SaveRelation(null, sourceId, targetId, relation.name(), relation.type(), relation.multiplicitySource(), relation.multiplicityTarget()));
-      createdRelations++;
+      if (relation.associationClass() != null) {
+        UUID associationId = classIdByName.get(relation.associationClass().toLowerCase(Locale.ROOT));
+        if (associationId == null) {
+          warnings.add("No se pudo aplicar la clase asociativa «" + relation.associationClass() + "» porque no está disponible en el diagrama.");
+          continue;
+        }
+        String firstKey = relationKey(sourceId, associationId, TipoRelacionUML.ASOCIACION);
+        String secondKey = relationKey(targetId, associationId, TipoRelacionUML.ASOCIACION);
+        RelacionUML existingManyToMany = relationRepo.findByDiagramaId(diagramId).stream()
+            .filter(existing -> isMany(existing.getMultiplicidadOrigen()) && isMany(existing.getMultiplicidadDestino()))
+            .filter(existing -> {
+              UUID existingSource = existing.getElementoOrigen().getId();
+              UUID existingTarget = existing.getElementoDestino().getId();
+              return existingSource.equals(sourceId) && existingTarget.equals(targetId)
+                  || existingSource.equals(targetId) && existingTarget.equals(sourceId);
+            }).findFirst().orElse(null);
+        if (existingManyToMany != null) {
+          umlService.saveRelation(projectId, diagramId, email, new SaveRelation(existingManyToMany.getId(), sourceId,
+              associationId, relation.name(), TipoRelacionUML.ASOCIACION, "1", "*"));
+          existingRelationKeys.remove(relationKey(sourceId, targetId, existingManyToMany.getTipoRelacion()));
+          existingRelationKeys.add(firstKey);
+          createdRelations++;
+        } else if (!existingRelationKeys.add(firstKey)) {
+          warnings.add("La conexión de «" + relation.source() + "» con la clase asociativa ya existe.");
+        } else {
+          umlService.saveRelation(projectId, diagramId, email, new SaveRelation(null, sourceId, associationId,
+              relation.name(), TipoRelacionUML.ASOCIACION, "1", "*"));
+          createdRelations++;
+        }
+        if (existingRelationKeys.add(secondKey)) {
+          umlService.saveRelation(projectId, diagramId, email, new SaveRelation(null, targetId, associationId,
+              relation.name(), TipoRelacionUML.ASOCIACION, "1", "*"));
+          createdRelations++;
+        } else {
+          warnings.add("La conexión de «" + relation.target() + "» con la clase asociativa ya existe.");
+        }
+      } else {
+        String key = relationKey(sourceId, targetId, relation.type());
+        if (!existingRelationKeys.add(key)) { warnings.add("No se duplicó la relación «" + relation.source() + " → " + relation.target() + "."); continue; }
+        umlService.saveRelation(projectId, diagramId, email, new SaveRelation(null, sourceId, targetId, relation.name(), relation.type(), relation.multiplicitySource(), relation.multiplicityTarget()));
+        createdRelations++;
+      }
     }
 
     if (createdClasses == 0 && createdRelations == 0 && request.mode() == ImageImportMode.ADD) {
@@ -738,6 +813,7 @@ public class AiAssistantService {
         Perform an exhaustive reverse-engineering of this UML class diagram image into valid JSON:
         Step 1: Extract EVERY visible class, interface, abstract class, and enumeration with its name, attributes, and methods.
         Step 2: Inspect EVERY class boundary on all 4 sides for ALL connector lines (associations, inheritances, aggregations, compositions, dependencies).
+        Step 3: Preserve the image layout. For each class, return x and y as the pixel coordinates of the CENTER of its box, measured from the image's top-left corner (x increases rightward, y downward). Do not use the same/default coordinates or rearrange classes into a grid; the relative positions must match the image.
         Return ONLY valid JSON matching this exact schema:
         {
           "classes": [
@@ -759,7 +835,8 @@ public class AiAssistantService {
               "name": null,
               "multiplicitySource": "1",
               "multiplicityTarget": "*",
-              "confidence": 0.9
+              "confidence": 0.9,
+              "associationClass": null
             }
           ],
           "warnings": []
@@ -768,6 +845,9 @@ public class AiAssistantService {
         - In herencia: source is the subclass and target is the superclass.
         - In composicion/agregacion: source is the owner class (near the diamond).
         - Multiplicities: use exact strings like "1", "*", "0..1", "1..*".
+        - UML association classes/intermediate classes: when a box named like Detalle_Venta (or DetalleVenta) is linked to an endpoint of a relationship between Venta and Producto, or has a dashed connector to that relationship line, set associationClass="Detalle_Venta" on Venta–Producto. A recognized associationClass in this application means the relationship is M:N: return multiplicity "0..*" at BOTH endpoints, even if a label is faint or appears to say "1". Do NOT emit Detalle_Venta–Venta or Detalle_Venta–Producto as ordinary relations. Keep the class and its attributes in classes; application converts the M:N to two 1:N links.
+        - More generally, when a class box has a dashed connector to an association line, set associationClass to that class name on the relationship between the two endpoint classes. Do not output a separate ordinary edge from that association class to either endpoint.
+        - Set associationClass to null for ordinary relationships.
         - Do not output markdown code fences (```json). Return raw JSON only.
         """ + (hint == null || hint.isBlank() ? "" : "\nDomain hint provided by developer: " + hint.trim());
 
@@ -1757,8 +1837,20 @@ public class AiAssistantService {
       }
       case "CREAR_CLASE_INTERMEDIA" -> {
         String middle = textField(operation, "claseIntermedia", "middleClass", "clase");
-        yield middle.isBlank() || origen.isBlank() || destino.isBlank() ? null
-            : "Crear clase intermedia " + middle + " entre " + origen + " y " + destino;
+        if (middle.isBlank()) yield null;
+        String command = "Crear clase intermedia " + middle;
+        if (!origen.isBlank() && !destino.isBlank()) command += " entre " + origen + " y " + destino;
+        else command += " para la relacion seleccionada";
+        if (operation.path("atributos").isArray() && !operation.path("atributos").isEmpty()) {
+          List<String> attributes = new ArrayList<>();
+          for (JsonNode attribute : operation.path("atributos")) {
+            String name = textField(attribute, "nombre", "name");
+            String attrType = textField(attribute, "tipo", "type");
+            if (!name.isBlank()) attributes.add(name + ":" + (attrType.isBlank() ? "String" : attrType));
+          }
+          if (!attributes.isEmpty()) command += " con atributos " + String.join(", ", attributes);
+        }
+        yield command;
       }
       case "CREAR_GENERALIZACION" -> structuredRelationCommand("herencia", origen, destino, multOrigen, multDestino);
       case "CREAR_COMPOSICION" -> structuredRelationCommand("composicion", origen, destino, multOrigen, multDestino);
@@ -1791,6 +1883,26 @@ public class AiAssistantService {
       if (!value.isBlank()) return value;
     }
     return "";
+  }
+
+  private List<IntermediateAttribute> parseIntermediateAttributes(String source) {
+    if (source == null || source.isBlank()) return List.of();
+    List<IntermediateAttribute> attributes = new ArrayList<>();
+    for (String item : source.split("(?i)\\s+y\\s+(?=[\\p{L}_][\\p{L}\\p{N}_]*\\s*[: ])|[,;]")) {
+      String value = item.trim();
+      if (value.isBlank()) continue;
+      String[] parts = value.contains(":") ? value.split(":", 2) : value.split("\\s+", 2);
+      String name = parts[0].trim().replaceAll("[^\\p{L}\\p{N}_]", "");
+      if (name.isBlank()) continue;
+      String type = parts.length > 1 && !parts[1].isBlank() ? parts[1].trim().replaceAll("[^\\p{L}\\p{N}_<>\\[\\].]", "") : "String";
+      attributes.add(new IntermediateAttribute(name, type.isBlank() ? "String" : type));
+    }
+    return List.copyOf(attributes);
+  }
+
+  private boolean isMany(String multiplicity) {
+    if (multiplicity == null) return false;
+    return multiplicity.trim().matches("(?i)(?:\\*|n|m|(?:0|1)\\.\\.(?:\\*|n|m))");
   }
 
   private String normalizeMultiplicity(String value) {

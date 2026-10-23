@@ -41,6 +41,7 @@ type Props = {
   onEditElement: (id: string) => void; onEditRelation: (relation: RelationDetail) => void; onRelationType: (type: TipoRelacionUML) => void
   onValidate: () => void; onRelational: () => void; onAi: (initialMode?: 'command' | 'image' | 'chat') => void; onGenerator: () => void
   onVersions: () => void; onExchange: () => void; onApiTester: () => void; onDeleteSelected: () => void
+  onCreateIntermediateClass: (relation: RelationDetail) => void
   selectedCount: number; onSelectAll: () => void; onDeselectAll: () => void
   children: ReactNode
 }
@@ -51,6 +52,7 @@ export function WorkspaceChrome(p: Props) {
 
 function WorkspaceChromeContent(p: Props) {
   const [activeTool, setActiveTool] = useState('Selección')
+  const [modelingMode, setModelingMode] = useState<'manual' | 'image' | 'voice'>('manual')
   const [relationType, setRelationType] = useState<TipoRelacionUML>('ASOCIACION')
   const [imageName, setImageName] = useState('')
   const imageInput = useRef<HTMLInputElement>(null)
@@ -225,24 +227,49 @@ function WorkspaceChromeContent(p: Props) {
               <span className="eyebrow">MODELADO MANUAL</span>
               <strong>Herramientas</strong>
             </div>
-            <button className={`tool-item ${activeTool === 'Selección' ? 'selected' : ''}`} title="Seleccionar y mover elementos" onClick={() => setActiveTool('Selección')}>
-              <span>↖</span>Selección
-            </button>
-            <div className="tool-group-label">ELEMENTOS</div>
-            {tools.slice(1, 5).map(t => (
-              <button key={t.label} className={`tool-item ${activeTool === t.label ? 'selected' : ''}`} disabled={isEditingDisabled} title={`${t.label} · crear en el lienzo`} onClick={() => { setActiveTool(t.label); if (t.type) p.onCreate(t.type) }}>
-                <span>{t.icon}</span>{t.label}
-              </button>
-            ))}
-            <div className="tool-group-label">RELACIONES <small>arrastra entre nodos</small></div>
-            <button className={`tool-item relation-create ${activeTool === 'Crear relación' ? 'selected' : ''}`} disabled={isEditingDisabled} title="Conecta dos elementos desde sus puntos de conexión" onClick={() => setActiveTool('Crear relación')}>
-              <span>⌁</span>Crear relación
-            </button>
-            {tools.slice(5).map(t => (
-              <button key={t.label} className={`tool-item relation-sub ${relationType === t.relation ? 'selected' : ''}`} disabled={isEditingDisabled} title={`Usar tipo ${t.label}; arrastra desde un nodo a otro`} onClick={() => { setRelationType(t.relation!); p.onRelationType(t.relation!); setActiveTool('Crear relación') }}>
-                <span>{t.icon}</span>{t.label}
-              </button>
-            ))}
+            <details className="tool-module">
+              <summary>Modos de modelado</summary>
+              <div className="tool-module-content mode-module-content">
+                <button className={`mode-card mode-card-sidebar ${modelingMode === 'manual' ? 'active' : ''}`} onClick={() => { setModelingMode('manual'); setActiveTool('Selección') }}>
+                  <span className="mode-icon"><CommandIcon size={15} /></span>
+                  <span><strong>Modelado manual</strong><small>Clases y relaciones en el lienzo</small></span>
+                </button>
+                <button className={`mode-card mode-card-sidebar ${modelingMode === 'image' ? 'active' : ''}`} onClick={() => { setModelingMode('image'); imageInput.current?.click() }}>
+                  <span className="mode-icon"><ImageIcon size={15} /></span>
+                  <span><strong>Imagen → modelo</strong><small>{imageName || 'Cargar diagrama UML'}</small></span>
+                </button>
+                <button className={`mode-card mode-card-sidebar ${modelingMode === 'voice' ? 'active' : ''}`} onClick={() => { setModelingMode('voice'); p.onAi('command') }}>
+                  <span className="mode-icon"><MicIcon size={15} /></span>
+                  <span><strong>Modelado por voz</strong><small>Dictado de clases y relaciones</small></span>
+                </button>
+              </div>
+            </details>
+            <details className="tool-module">
+              <summary>Elementos</summary>
+              <div className="tool-module-content">
+                <button className={`tool-item ${activeTool === 'Selección' ? 'selected' : ''}`} title="Seleccionar y mover elementos" onClick={() => { setModelingMode('manual'); setActiveTool('Selección') }}>
+                  <span>↖</span>Selección
+                </button>
+                {tools.slice(1, 5).map(t => (
+                  <button key={t.label} className={`tool-item ${activeTool === t.label ? 'selected' : ''}`} disabled={isEditingDisabled} title={`${t.label} · crear en el lienzo`} onClick={() => { setModelingMode('manual'); setActiveTool(t.label); if (t.type) p.onCreate(t.type) }}>
+                    <span>{t.icon}</span>{t.label}
+                  </button>
+                ))}
+              </div>
+            </details>
+            <details className="tool-module">
+              <summary>Relaciones <small>arrastra entre nodos</small></summary>
+              <div className="tool-module-content">
+                <button className={`tool-item relation-create ${activeTool === 'Crear relación' ? 'selected' : ''}`} disabled={isEditingDisabled} title="Conecta dos elementos desde sus puntos de conexión" onClick={() => { setModelingMode('manual'); setActiveTool('Crear relación') }}>
+                  <span>⌁</span>Crear relación
+                </button>
+                {tools.slice(5).map(t => (
+                  <button key={t.label} className={`tool-item relation-sub ${relationType === t.relation ? 'selected' : ''}`} disabled={isEditingDisabled} title={`Usar tipo ${t.label}; arrastra desde un nodo a otro`} onClick={() => { setModelingMode('manual'); setRelationType(t.relation!); p.onRelationType(t.relation!); setActiveTool('Crear relación') }}>
+                    <span>{t.icon}</span>{t.label}
+                  </button>
+                ))}
+              </div>
+            </details>
             <p className="sidebar-hint">{activeTool === 'Crear relación' ? 'Arrastra desde un punto de conexión hasta otro elemento.' : 'Selecciona una herramienta para continuar.'}</p>
           </aside>
 
@@ -372,6 +399,11 @@ function WorkspaceChromeContent(p: Props) {
                         <PropertyRows title="MULTIPLICIDAD · ORIGEN" rows={[p.selectedRelation.multiplicidadOrigen || 'No definida']} empty="—"/>
                         <PropertyRows title="MULTIPLICIDAD · DESTINO" rows={[p.selectedRelation.multiplicidadDestino || 'No definida']} empty="—"/>
                         <button className="chrome-button full-button" disabled={isEditingDisabled} onClick={() => p.onEditRelation(p.selectedRelation!)}>Editar relación</button>
+                        {isMany(p.selectedRelation.multiplicidadOrigen) && isMany(p.selectedRelation.multiplicidadDestino) && (
+                          <button className="chrome-button full-button" disabled={isEditingDisabled} onClick={() => p.onCreateIntermediateClass(p.selectedRelation!)}>
+                            Crear clase intermedia
+                          </button>
+                        )}
                       </>
                     ) : (
                       <>
@@ -415,6 +447,10 @@ function WorkspaceChromeContent(p: Props) {
       <span className="footer-last">{p.queueCount ? `${p.queueCount} cambios locales pendientes` : p.savingStatus}</span>
     </footer>
   </div>
+}
+
+function isMany(value: string | null) {
+  return value != null && /^(?:\*|n|m|(?:0|1)\.\.(?:\*|n|m))$/i.test(value.trim())
 }
 
 function PropertyRows({ title, rows, empty }: { title: string; rows: string[]; empty: string }) {

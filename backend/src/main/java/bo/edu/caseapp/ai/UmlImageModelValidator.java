@@ -72,12 +72,13 @@ public final class UmlImageModelValidator {
         classes.add(umlClass);
       }
       if (classes.isEmpty()) throw invalid("La IA no identificó clases con suficiente confianza. No se modificó el diagrama.");
+      classes = normalizeImagePositions(classes);
 
       List<ImageRelation> relations = new ArrayList<>();
       Set<String> uniqueRelations = new HashSet<>();
       for (JsonNode node : root.path("relations")) {
         requireObject(node, "Cada relación debe ser un objeto JSON.");
-        requireFields(node, Set.of("source", "target", "type", "name", "multiplicitySource", "multiplicityTarget", "confidence"), "Una relación contiene campos faltantes o no reconocidos.");
+        requireOptionalFields(node, Set.of("source", "target", "type", "name", "multiplicitySource", "multiplicityTarget", "confidence"), Set.of("associationClass"), "Una relación contiene campos faltantes o no reconocidos.");
         String source = optionalText(node, "source", 120), target = optionalText(node, "target", 120);
         String typeText = optionalText(node, "type", 40);
         if (source == null || target == null) { warnings.add("Se omitió una relación cuyo origen o destino no se pudo identificar."); continue; }
@@ -94,6 +95,18 @@ public final class UmlImageModelValidator {
         }
         String multiplicitySource = readMultiplicity(node, "multiplicitySource", source, warnings);
         String multiplicityTarget = readMultiplicity(node, "multiplicityTarget", target, warnings);
+        String associationClass = optionalText(node, "associationClass", 120);
+        if (associationClass != null && !byName.containsKey(normalize(associationClass))) {
+          warnings.add("Se omitió la clase asociativa no reconocida «" + associationClass + "» en la relación «" + source + " → " + target + "».");
+          associationClass = null;
+        }
+        if (associationClass != null && type == TipoRelacionUML.ASOCIACION
+            && (!isManyMultiplicity(multiplicitySource) || !isManyMultiplicity(multiplicityTarget))) {
+          warnings.add("Se corrigió «" + source + " → " + target + "» a muchos a muchos porque la imagen identifica «"
+              + associationClass + "» como clase intermedia.");
+          multiplicitySource = "0..*";
+          multiplicityTarget = "0..*";
+        }
         String sourceKey = normalize(source), targetKey = normalize(target);
         if (type == TipoRelacionUML.ASOCIACION && sourceKey.compareTo(targetKey) > 0) {
           String swap = sourceKey;
@@ -106,14 +119,97 @@ public final class UmlImageModelValidator {
           continue;
         }
         String name = optionalText(node, "name", 120);
-        relations.add(new ImageRelation(source, target, name, type, multiplicitySource, multiplicityTarget, confidence));
+        relations.add(new ImageRelation(source, target, name, type, multiplicitySource, multiplicityTarget, confidence, associationClass));
       }
+      relations = normalizeIntermediateClasses(classes, relations, warnings);
       return new ImageModel(List.copyOf(classes), List.copyOf(relations), distinctWarnings(warnings));
     } catch (BadRequestException exception) {
       throw exception;
     } catch (Exception exception) {
       throw invalid("La IA no devolvió JSON UML válido. No se modificó el diagrama.");
     }
+  }
+
+  /** Repairs a common vision-model mistake: a "Detalle_X" box linked to X is
+   * emitted as an ordinary edge, while the actual X-to-Y many-to-many edge is
+   * emitted separately. In that unambiguous case, keep the box and attributes,
+   * but represent it as the association class instead of a third entity edge.
+   */
+  private static List<ImageRelation> normalizeIntermediateClasses(
+      List<ImageClass> classes, List<ImageRelation> relations, List<String> warnings) {
+    List<ImageRelation> normalized = new ArrayList<>(relations);
+    Set<String> consumedConnectorKeys = new HashSet<>();
+    for (int i = 0; i < normalized.size(); i++) {
+      ImageRelation manyToMany = normalized.get(i);
+      if (manyToMany.associationClass() != null || manyToMany.type() != TipoRelacionUML.ASOCIACION) continue;
+
+      ImageClass candidate = null;
+      String endpoint = null;
+      for (ImageClass imageClass : classes) {
+        if (imageClass.type() != TipoElementoUML.CLASE) continue;
+        String className = normalizeIntermediateKey(imageClass.name());
+        String detailName = className.startsWith("detalle") ? className.substring("detalle".length())
+            : className.startsWith("detail") ? className.substring("detail".length()) : "";
+        if (detailName.isBlank()) continue;
+        for (String relationEndpoint : List.of(manyToMany.source(), manyToMany.target())) {
+          String normalizedEndpoint = normalizeIntermediateKey(relationEndpoint);
+          if (!detailName.equals(normalizedEndpoint) && !detailName.endsWith(normalizedEndpoint)) continue;
+          boolean hasDirectDetailEdge = relations.stream().anyMatch(edge -> edge.type() == TipoRelacionUML.ASOCIACION
+              && ((normalizeIntermediateKey(edge.source()).equals(className) && normalizeIntermediateKey(edge.target()).equals(normalizedEndpoint))
+                  || (normalizeIntermediateKey(edge.target()).equals(className) && normalizeIntermediateKey(edge.source()).equals(normalizedEndpoint))));
+          if (hasDirectDetailEdge) {
+            candidate = imageClass;
+            endpoint = relationEndpoint;
+            break;
+          }
+        }
+        if (candidate != null) break;
+      }
+      if (candidate == null) continue;
+
+      normalized.set(i, new ImageRelation(manyToMany.source(), manyToMany.target(), manyToMany.name(),
+          manyToMany.type(), "0..*", "0..*",
+          manyToMany.confidence(), candidate.name()));
+      String classKey = normalizeIntermediateKey(candidate.name()), endpointKey = normalizeIntermediateKey(endpoint);
+      for (ImageRelation edge : relations) {
+        if (edge.type() != TipoRelacionUML.ASOCIACION) continue;
+        boolean connector = normalizeIntermediateKey(edge.source()).equals(classKey) && normalizeIntermediateKey(edge.target()).equals(endpointKey)
+            || normalizeIntermediateKey(edge.target()).equals(classKey) && normalizeIntermediateKey(edge.source()).equals(endpointKey);
+        if (connector) consumedConnectorKeys.add(relationIdentity(edge));
+      }
+      warnings.add("Se reconoció «" + candidate.name() + "» como clase intermedia; se corrigió la relación entre «"
+          + manyToMany.source() + "» y «" + manyToMany.target() + "» a muchos a muchos.");
+    }
+    normalized.removeIf(edge -> consumedConnectorKeys.contains(relationIdentity(edge)));
+    return normalized;
+  }
+
+  private static String relationIdentity(ImageRelation relation) {
+    return normalizeIntermediateKey(relation.source()) + "|" + normalizeIntermediateKey(relation.target()) + "|" + relation.type();
+  }
+
+  private static String normalizeIntermediateKey(String value) {
+    return value == null ? "" : value.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT);
+  }
+
+  /** Expands model-estimated image pixels into a useful canvas area without changing
+   * the relative left/right and top/bottom arrangement from the source image.
+   */
+  private static List<ImageClass> normalizeImagePositions(List<ImageClass> classes) {
+    List<ImageClass> positioned = classes.stream().filter(c -> c.x() != null && c.y() != null).toList();
+    if (positioned.size() < 2) return classes;
+    double minX = positioned.stream().mapToDouble(ImageClass::x).min().orElse(0);
+    double maxX = positioned.stream().mapToDouble(ImageClass::x).max().orElse(minX);
+    double minY = positioned.stream().mapToDouble(ImageClass::y).min().orElse(0);
+    double maxY = positioned.stream().mapToDouble(ImageClass::y).max().orElse(minY);
+    if (maxX - minX < 1 && maxY - minY < 1) return classes;
+    return classes.stream().map(imageClass -> {
+      if (imageClass.x() == null || imageClass.y() == null) return imageClass;
+      double x = maxX - minX < 1 ? 520 : 80 + ((imageClass.x() - minX) / (maxX - minX)) * 920;
+      double y = maxY - minY < 1 ? 300 : 70 + ((imageClass.y() - minY) / (maxY - minY)) * 620;
+      return new ImageClass(imageClass.name(), imageClass.type(), imageClass.confidence(),
+          (double) Math.round(x), (double) Math.round(y), imageClass.attributes(), imageClass.methods());
+    }).toList();
   }
 
   public static ImageModel validateForApply(ImageModel model) {
@@ -228,6 +324,10 @@ public final class UmlImageModelValidator {
     return s;
   }
 
+  private static boolean isManyMultiplicity(String value) {
+    return value != null && value.matches("(?i)(?:\\*|n|m|(?:0|1)\\.\\.(?:\\*|n|m))");
+  }
+
   private static Double optionalCoordinate(JsonNode node, String field, List<String> warnings, String name) {
     JsonNode value = node.get(field);
     if (value == null || value.isNull()) return null;
@@ -274,6 +374,12 @@ public final class UmlImageModelValidator {
     Set<String> actual = new HashSet<>();
     node.fieldNames().forEachRemaining(actual::add);
     if (!actual.equals(fields)) throw invalid(error);
+  }
+  private static void requireOptionalFields(JsonNode node, Set<String> required, Set<String> optional, String error) {
+    if (node == null || !node.isObject()) throw invalid(error);
+    Set<String> actual = new HashSet<>();
+    node.fieldNames().forEachRemaining(actual::add);
+    if (!actual.containsAll(required) || !required.containsAll(actual.stream().filter(field -> !optional.contains(field)).collect(java.util.stream.Collectors.toSet()))) throw invalid(error);
   }
   private static void requireRequiredFields(JsonNode node, Set<String> requiredFields, String error) {
     if (node == null || !node.isObject()) throw invalid(error);

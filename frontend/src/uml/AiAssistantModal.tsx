@@ -28,9 +28,12 @@ type Props = {
 
 type ImageModel = {
   classes: { name: string; type: string; confidence: number; x: number | null; y: number | null; attributes: { name: string; type: string; visibility: string; confidence: number }[]; methods: { name: string; returnType: string; parameters: string; visibility: string; confidence: number }[] }[]
-  relations: { source: string; target: string; type: string; name: string | null; multiplicitySource: string | null; multiplicityTarget: string | null; confidence: number }[]
+  relations: { source: string; target: string; type: string; name: string | null; multiplicitySource: string | null; multiplicityTarget: string | null; confidence: number; associationClass?: string | null }[]
   warnings: string[]
 }
+
+const IMAGE_MULTIPLICITIES = ['1', '0..1', '*', '0..*', '1..*']
+const isManyMultiplicity = (value: string | null | undefined) => value != null && /^(?:\*|n|m|(?:0|1)\.\.(?:\*|n|m))$/i.test(value.trim())
 
 type MessageItem = {
   sender: 'user' | 'ai'
@@ -170,6 +173,19 @@ export function AiAssistantModal({
       setLoading(false)
       setAnalyzingStatus(null)
     }
+  }
+
+  function updateImageRelation(index: number, patch: Partial<ImageModel['relations'][number]>) {
+    setImageModel(current => {
+      if (!current) return current
+      const relations = current.relations.map((relation, relationIndex) => relationIndex === index ? { ...relation, ...patch } : relation)
+      const updated = relations[index]
+      const isNowManyToMany = isManyMultiplicity(updated.multiplicitySource) && isManyMultiplicity(updated.multiplicityTarget)
+      const warnings = isNowManyToMany && updated.associationClass
+        ? current.warnings.filter(warning => !warning.includes('clase asociativa') || !warning.includes(updated.source) || !warning.includes(updated.target))
+        : current.warnings
+      return { ...current, relations, warnings }
+    })
   }
 
   async function handleApplyImageModel() {
@@ -586,12 +602,32 @@ export function AiAssistantModal({
 
                 {imageModel.relations.length > 0 && (
                   <div style={{ fontSize: '0.8rem', color: '#334155', borderTop: '1px dashed #cbd5e1', paddingTop: '0.5rem' }}>
-                    <strong>Relaciones:</strong>{' '}
-                    {imageModel.relations.map((r, i) => (
-                      <span key={i} style={{ marginRight: '0.6rem', background: '#ffffff', padding: '2px 6px', border: '1px solid #cbd5e1', borderRadius: '4px' }}>
-                        {r.source} ({r.multiplicitySource ?? '?'}) ──{r.type}──&gt; {r.target} ({r.multiplicityTarget ?? '?'})
-                      </span>
-                    ))}
+                    <strong>Relaciones — revisa y corrige multiplicidades antes de aplicar:</strong>
+                    <div style={{ display: 'grid', gap: '.5rem', marginTop: '.4rem' }}>
+                      {imageModel.relations.map((r, i) => (
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(110px,1fr) 78px 78px minmax(130px,1fr)', gap: '.4rem', alignItems: 'center', background: '#ffffff', padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px' }}>
+                          <span><strong>{r.source}</strong> → <strong>{r.target}</strong></span>
+                          <label style={{ display: 'grid', gap: 2 }}>Origen
+                            <select aria-label={`Multiplicidad de origen ${r.source} a ${r.target}`} value={r.multiplicitySource ?? '1'} onChange={event => updateImageRelation(i, { multiplicitySource: event.target.value })}>
+                              {IMAGE_MULTIPLICITIES.map(value => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label style={{ display: 'grid', gap: 2 }}>Destino
+                            <select aria-label={`Multiplicidad de destino ${r.source} a ${r.target}`} value={r.multiplicityTarget ?? '1'} onChange={event => updateImageRelation(i, { multiplicityTarget: event.target.value })}>
+                              {IMAGE_MULTIPLICITIES.map(value => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          {isManyMultiplicity(r.multiplicitySource) && isManyMultiplicity(r.multiplicityTarget) ? (
+                            <label style={{ display: 'grid', gap: 2 }}>Clase intermedia
+                              <select aria-label={`Clase intermedia de ${r.source} a ${r.target}`} value={r.associationClass ?? ''} onChange={event => updateImageRelation(i, { associationClass: event.target.value || null })}>
+                                <option value="">Ninguna</option>
+                                {imageModel.classes.map(imageClass => <option key={imageClass.name} value={imageClass.name}>{imageClass.name}</option>)}
+                              </select>
+                            </label>
+                          ) : <span style={{ color: '#64748b' }}>{r.associationClass ? `Clase asociativa: ${r.associationClass}` : r.type}</span>}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {imageModel.warnings.length > 0 && (

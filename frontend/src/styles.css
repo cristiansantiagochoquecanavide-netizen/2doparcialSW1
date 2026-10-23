@@ -1109,7 +1109,7 @@ main.workspace-page > .error { margin: .75rem 1rem; }
 .project-actions summary,.more-tools summary { padding: .45rem .65rem; border: 1px solid var(--line); border-radius: 6px; color: #334155; font-weight: 600; cursor: pointer; list-style: none; }
 .project-menu { position: absolute; z-index: 20; top: calc(100% + 5px); right: 0; display: grid; min-width: 220px; padding: .4rem; border: 1px solid var(--line); border-radius: 8px; background: white; box-shadow: 0 12px 35px #0f172a25; }
 .project-menu button { padding: .6rem .75rem; background: white; color: #1e293b; text-align: left; font-size: 12px; font-weight: 500; border: 0; border-radius: 4px; }.project-menu button:hover { background: #f1f5f9; color: #1d4ed8; }
-.modeling-modes { display: grid; grid-template-columns: minmax(150px, 1fr) repeat(3, minmax(210px, 1.15fr)); gap: .75rem; align-items: stretch; padding: .65rem 1.25rem; border-bottom: 1px solid var(--line); background: #fff; flex: 0 0 auto; }
+.modeling-modes { display: none; }
 .mode-heading { display: grid; align-content: center; gap: .35rem; padding-left: .25rem; color: #475569; font-size: 11px; }
 .mode-card { position: relative; display: flex; min-height: 52px; align-items: center; gap: .7rem; padding: .55rem .75rem; border: 1px solid var(--line); border-radius: 8px; background: white; color: var(--ink); text-align: left; transition: all 0.15s ease; }
 .mode-card.active { border-color: #3b82f6; background: #eff6ff; box-shadow: inset 3px 0 #2563eb; }
@@ -1129,6 +1129,11 @@ main.workspace-page > .error { margin: .75rem 1rem; }
 
 .tool-sidebar,.properties-panel { overflow-y: auto; background: white; display: flex; flex-direction: column; height: 100%; min-height: 0; }.tool-sidebar { padding: 1rem .75rem; border-right: 1px solid var(--line); }.properties-panel { padding: 1rem; border-left: 1px solid var(--line); }
 .panel-heading { display: grid; gap: .3rem; margin: 0 .35rem .8rem; }.panel-heading strong { font-size: 15px; color: #0f172a; }
+.tool-module { margin: .25rem 0; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; overflow: hidden; }
+.tool-module > summary { display: flex; align-items: center; justify-content: space-between; padding: .65rem .7rem; color: #334155; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; list-style: none; }
+.tool-module > summary::-webkit-details-marker { display: none; }.tool-module > summary::after { content: '▾'; color: #64748b; font-size: 13px; transition: transform .15s ease; }.tool-module:not([open]) > summary::after { transform: rotate(-90deg); }
+.tool-module > summary:hover { background: #f8fafc; color: #1d4ed8; }.tool-module > summary small { margin-left: .35rem; color: #64748b; font-size: 10px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.tool-module-content { padding: .25rem .35rem .45rem; }.mode-module-content { display: grid; gap: .35rem; }.mode-card-sidebar { width: 100%; min-height: 48px; padding: .45rem .5rem; border-radius: 6px; gap: .5rem; cursor: pointer; }.mode-card-sidebar strong { font-size: 11px; }.mode-card-sidebar small { font-size: 10px; line-height: 1.2; }.mode-card-sidebar .mode-icon { width: 27px; height: 27px; border-radius: 6px; }.mode-card-sidebar.active { box-shadow: inset 3px 0 #2563eb; }
 .tool-item { display: flex; width: 100%; align-items: center; gap: .65rem; margin: 2px 0; padding: .55rem .65rem; border: 0; border-radius: 6px; background: transparent; color: #334155; text-align: left; font-size: 12px; font-weight: 500; cursor: pointer; }
 .tool-item > span { width: 18px; color: #475569; text-align: center; font-size: 15px; font-weight: bold; }.tool-item.selected { background: #dbeafe; color: #1d4ed8; font-weight: 700; }.tool-item.selected > span { color: #1d4ed8; }
 .tool-item:disabled { opacity: .48; cursor: not-allowed; }.tool-group-label { margin: 1rem .55rem .35rem; color: #475569; font-size: 10px; font-weight: 800; letter-spacing: .08em; }.tool-group-label small { display: block; margin-top: 3px; font-size: 10px; font-weight: 400; letter-spacing: 0; color: #64748b; }

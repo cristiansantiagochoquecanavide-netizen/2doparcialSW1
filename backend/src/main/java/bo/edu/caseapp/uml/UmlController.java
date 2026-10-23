@@ -212,6 +212,22 @@ public class UmlController {
     response.setHeader("X-Diagram-Revision", String.valueOf(service.getDiagramRevision(diagramId)));
   }
 
+  @DeleteMapping("/{diagramId}/elements")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void deleteElements(
+      @PathVariable UUID projectId,
+      @PathVariable UUID diagramId,
+      Authentication auth,
+      @Valid @RequestBody DeleteElementsRequest request,
+      @RequestHeader(value = "X-Diagram-Revision", required = false) Long revisionHeader,
+      @RequestHeader(value = "If-Match", required = false) String ifMatch,
+      HttpServletResponse response
+  ) {
+    Long expectedRev = requireExpectedRevision(revisionHeader, ifMatch, null);
+    service.deleteElements(projectId, diagramId, auth.getName(), request.elementIds(), expectedRev);
+    response.setHeader("X-Diagram-Revision", String.valueOf(service.getDiagramRevision(diagramId)));
+  }
+
   @PostMapping("/{diagramId}/relations")
   @ResponseStatus(HttpStatus.OK)
   public RelationDetail saveRelation(
@@ -229,6 +245,23 @@ public class UmlController {
     RelationDetail detail = service.createRelation(projectId, diagramId, auth.getName(), resolved);
     response.setHeader("X-Diagram-Revision", String.valueOf(service.getDiagramRevision(diagramId)));
     return detail;
+  }
+
+  @PostMapping("/{diagramId}/relations/{relationId}/intermediate-class")
+  public DiagramFullView createIntermediateClass(
+      @PathVariable UUID projectId,
+      @PathVariable UUID diagramId,
+      @PathVariable UUID relationId,
+      Authentication auth,
+      @Valid @RequestBody CreateIntermediateClass request,
+      @RequestHeader(value = "X-Diagram-Revision", required = false) Long revisionHeader,
+      @RequestHeader(value = "If-Match", required = false) String ifMatch,
+      HttpServletResponse response
+  ) {
+    Long expectedRev = requireExpectedRevision(revisionHeader, ifMatch, null);
+    DiagramFullView view = service.createIntermediateClass(projectId, diagramId, auth.getName(), relationId, request, expectedRev);
+    response.setHeader("X-Diagram-Revision", String.valueOf(view.diagram().revision()));
+    return view;
   }
 
   @PutMapping("/{diagramId}/relations/{relationId}")

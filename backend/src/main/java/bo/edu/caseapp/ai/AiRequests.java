@@ -84,6 +84,12 @@ public final class AiRequests {
       TipoRelacionUML type,
       String multiplicitySource,
       String multiplicityTarget,
-      Double confidence
-  ) {}
+      Double confidence,
+      String associationClass
+  ) {
+    public ImageRelation(String source, String target, String name, TipoRelacionUML type,
+        String multiplicitySource, String multiplicityTarget, Double confidence) {
+      this(source, target, name, type, multiplicitySource, multiplicityTarget, confidence, null);
+    }
+  }
 }

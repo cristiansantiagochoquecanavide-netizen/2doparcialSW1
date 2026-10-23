@@ -59,6 +59,60 @@ class UmlImageModelValidatorTest {
   }
 
   @Test
+  void recognizesDetailClassAsIntermediateWhenVisionReturnsItAsSeparateEdge() {
+    ImageModel model = validate("""
+        {"classes":[
+          {"name":"Venta","type":"CLASE","confidence":0.95,"x":100,"y":100,"attributes":[],"methods":[]},
+          {"name":"Producto","type":"CLASE","confidence":0.95,"x":500,"y":100,"attributes":[],"methods":[]},
+          {"name":"Detalle_Venta","type":"CLASE","confidence":0.95,"x":300,"y":250,"attributes":[{"name":"cantidad","type":"Integer","visibility":"-","confidence":0.9}],"methods":[]}
+        ],"relations":[
+          {"source":"Venta","target":"Producto","type":"ASOCIACION","name":null,"multiplicitySource":"0..*","multiplicityTarget":"0..*","confidence":0.9},
+          {"source":"Detalle_Venta","target":"Venta","type":"ASOCIACION","name":null,"multiplicitySource":"1","multiplicityTarget":"*","confidence":0.9}
+        ],"warnings":[]}
+        """);
+
+    assertEquals(1, model.relations().size());
+    assertEquals("Detalle_Venta", model.relations().getFirst().associationClass());
+    assertEquals("cantidad", model.classes().get(2).attributes().getFirst().name());
+    assertTrue(model.warnings().stream().anyMatch(w -> w.contains("clase intermedia")));
+  }
+
+  @Test
+  void repairsWrongMultiplicityWhenVisionIdentifiesAnAssociationClass() {
+    ImageModel model = validate("""
+        {"classes":[
+          {"name":"Venta","type":"CLASE","confidence":0.95,"x":100,"y":100,"attributes":[],"methods":[]},
+          {"name":"Producto","type":"CLASE","confidence":0.95,"x":500,"y":100,"attributes":[],"methods":[]},
+          {"name":"Detalle_Venta","type":"CLASE","confidence":0.95,"x":300,"y":250,"attributes":[],"methods":[]}
+        ],"relations":[
+          {"source":"Venta","target":"Producto","type":"ASOCIACION","name":null,"multiplicitySource":"1","multiplicityTarget":"0..*","confidence":0.9,"associationClass":"Detalle_Venta"}
+        ],"warnings":[]}
+        """);
+
+    ImageRelation relation = model.relations().getFirst();
+    assertEquals("0..*", relation.multiplicitySource());
+    assertEquals("0..*", relation.multiplicityTarget());
+    assertEquals("Detalle_Venta", relation.associationClass());
+    assertTrue(model.warnings().stream().anyMatch(w -> w.contains("Se corrigió")));
+  }
+
+  @Test
+  void expandsDetectedImageCoordinatesWhilePreservingClassOrder() {
+    ImageModel model = validate("""
+        {"classes":[
+          {"name":"A","type":"CLASE","confidence":0.95,"x":10,"y":20,"attributes":[],"methods":[]},
+          {"name":"B","type":"CLASE","confidence":0.95,"x":110,"y":120,"attributes":[],"methods":[]},
+          {"name":"C","type":"CLASE","confidence":0.95,"x":210,"y":220,"attributes":[],"methods":[]}
+        ],"relations":[],"warnings":[]}
+        """);
+
+    assertEquals(80.0, model.classes().getFirst().x());
+    assertEquals(1000.0, model.classes().getLast().x());
+    assertTrue(model.classes().getFirst().y() < model.classes().getLast().y());
+    assertTrue(model.classes().getFirst().x() < model.classes().get(1).x());
+  }
+
+  @Test
   void preservesMethodsAndParameters() {
     ImageModel model = validate("""
         {"classes":[{"name":"Pedido","type":"CLASE","confidence":0.9,"x":100,"y":100,"attributes":[],"methods":[{"name":"buscar","returnType":"Pedido","parameters":"id: Long, activo: Boolean","visibility":"+","confidence":0.88}]}],"relations":[],"warnings":[]}

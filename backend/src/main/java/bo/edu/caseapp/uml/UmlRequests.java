@@ -1,8 +1,10 @@
 package bo.edu.caseapp.uml;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 
@@ -53,6 +55,16 @@ public final class UmlRequests {
     }
   }
 
+  public record CreateIntermediateClass(
+      @NotBlank @Size(max = 120) String nombre,
+      @Size(max = 50) List<@Valid IntermediateAttribute> atributos
+  ) { }
+
+  public record IntermediateAttribute(
+      @NotBlank @Size(max = 120) String nombre,
+      @NotBlank @Size(max = 120) String tipo
+  ) { }
+
   public record PositionUpdate(
       @NotNull UUID id,
       @NotNull Double posicionX,
@@ -67,4 +79,8 @@ public final class UmlRequests {
       this(positions, null);
     }
   }
+
+  public record DeleteElementsRequest(
+      @NotEmpty List<@NotNull UUID> elementIds
+  ) { }
 }
