@@ -45,17 +45,25 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
   private final ConcurrentMap<String, Connection> sessions = new ConcurrentHashMap<>();
   private final ConcurrentMap<String, ScheduledFuture<?>> expiryTasks = new ConcurrentHashMap<>();
   private final ProjectService projects;
+  private final bo.edu.caseapp.chat.ProjectChatChannelRepository channels;
   private final ObjectMapper mapper;
   private final int maxParticipants;
   private final List<Map<String, Object>> iceServers;
+  private final org.springframework.context.ApplicationEventPublisher events;
+  private final String serverId = UUID.randomUUID().toString();
+  private final java.util.concurrent.atomic.AtomicLong presenceRevision = new java.util.concurrent.atomic.AtomicLong();
 
   public ProjectVoiceWebSocketHandler(
       ProjectService projects,
       ObjectMapper mapper,
       @Value("${app.voice.max-participants:6}") int maxParticipants,
-      @Value("${app.voice.ice-servers-json:[]}") String iceServersJson
+      @Value("${app.voice.ice-servers-json:[]}") String iceServersJson,
+      bo.edu.caseapp.chat.ProjectChatChannelRepository channels,
+      org.springframework.context.ApplicationEventPublisher events
   ) {
     this.projects = projects;
+    this.channels = channels;
+    this.events = events;
     this.mapper = mapper;
     if (maxParticipants < 2 || maxParticipants > 16) {
       throw new IllegalArgumentException("VOICE_MAX_PARTICIPANTS must be between 2 and 16 for mesh audio.");
@@ -120,7 +128,7 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
       return;
     }
     switch (frame.path("type").asText()) {
-      case "VOICE_JOIN" -> join(connection);
+      case "VOICE_JOIN" -> join(connection, frame);
       case "VOICE_LEAVE" -> leave(connection);
       case "VOICE_MUTE_STATE" -> updateMuteState(connection, frame);
       case "VOICE_OFFER", "VOICE_ANSWER" -> relayDescription(connection, frame);
@@ -144,7 +152,19 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
     }
   }
 
-  private void join(Connection connection) {
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  public void onChannelsChanged(bo.edu.caseapp.chat.ProjectChannelsChanged event) {
+    if (!"VOICE".equals(event.channelType()) || !"DELETED".equals(event.action())) return;
+    for (Connection connection : sessions.values()) {
+      if (connection.projectId.equals(event.projectId()) && event.channelId().equals(connection.roomId)) {
+        send(connection, Map.of("type", "VOICE_ROOM_DELETED", "message", "La sala fue eliminada por un colaborador."));
+        closeConnection(connection, new CloseStatus(4004, "Sala eliminada"));
+      }
+    }
+    rooms.remove(event.channelId());
+  }
+
+  private void join(Connection connection, JsonNode frame) {
     if (connection.joined) {
       sendError(connection, "ALREADY_JOINED", "Ya estás en la sala de voz.");
       return;
@@ -155,9 +175,23 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
       closeConnection(connection, CloseStatus.POLICY_VIOLATION);
       return;
     }
-    ConcurrentMap<String, Connection> room = rooms.computeIfAbsent(connection.projectId, ignored -> new ConcurrentHashMap<>());
+    UUID roomId;
+    try {
+      roomId = frame.hasNonNull("roomId") ? UUID.fromString(frame.path("roomId").asText()) : channels.defaultVoiceRoom(connection.projectId).orElseThrow();
+      if (!channels.existsByIdAndProject_IdAndChannelTypeAndArchivedAtIsNull(roomId, connection.projectId, "VOICE")) throw new IllegalArgumentException();
+    } catch (RuntimeException exception) {
+      sendError(connection, "ROOM_UNAVAILABLE", "La sala ya no existe o no pertenece al proyecto.");
+      return;
+    }
+    connection.roomId = roomId;
+    ConcurrentMap<String, Connection> room = rooms.computeIfAbsent(roomId, ignored -> new ConcurrentHashMap<>());
     synchronized (room) {
         if (sessions.get(connection.session.getId()) != connection || !connection.session.isOpen()) return;
+        // Deletion may have committed between the first lookup and assigning roomId.
+        if (!channels.existsByIdAndProject_IdAndChannelTypeAndArchivedAtIsNull(roomId, connection.projectId, "VOICE")) {
+          sendError(connection, "ROOM_UNAVAILABLE", "La sala fue eliminada.");
+          return;
+        }
         if (connection.joined) {
           sendError(connection, "ALREADY_JOINED", "Ya estás en la sala de voz.");
           return;
@@ -172,12 +206,13 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
         send(connection, Map.of("type", "VOICE_JOINED", "participantId", connection.participantId,
             "participants", existing, "maxParticipants", maxParticipants));
         broadcast(room, connection, Map.of("type", "VOICE_PARTICIPANT_JOINED", "participant", connection.participantView()));
+        publishPresence(connection.projectId, roomId);
     }
   }
 
   private void leave(Connection connection) {
     if (!connection.joined) return;
-    ConcurrentMap<String, Connection> room = rooms.get(connection.projectId);
+    ConcurrentMap<String, Connection> room = connection.roomId == null ? null : rooms.get(connection.roomId);
     if (room == null) {
       connection.joined = false;
       return;
@@ -186,6 +221,7 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
       if (room.remove(connection.participantId, connection)) {
         connection.joined = false;
         broadcast(room, null, Map.of("type", "VOICE_PARTICIPANT_LEFT", "participantId", connection.participantId));
+        publishPresence(connection.projectId, connection.roomId);
       }
     }
   }
@@ -198,9 +234,34 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
       return;
     }
     connection.muted = mutedNode.booleanValue();
-    ConcurrentMap<String, Connection> room = rooms.get(connection.projectId);
-    if (room != null) broadcast(room, null, Map.of(
-        "type", "VOICE_MUTE_STATE", "participantId", connection.participantId, "muted", connection.muted));
+    ConcurrentMap<String, Connection> room = connection.roomId == null ? null : rooms.get(connection.roomId);
+    if (room != null) synchronized (room) {
+      broadcast(room, null, Map.of("type", "VOICE_MUTE_STATE", "participantId", connection.participantId, "muted", connection.muted));
+      publishPresence(connection.projectId, connection.roomId);
+    }
+  }
+
+  public VoiceRoomPresenceChanged presence(UUID projectId, UUID roomId, String email) {
+    projects.requireAccess(projectId, email);
+    if (!channels.existsByIdAndProject_IdAndChannelTypeAndArchivedAtIsNull(roomId, projectId, "VOICE"))
+      throw new bo.edu.caseapp.error.NotFoundException("Sala de voz no encontrada.");
+    return presenceSnapshot(projectId, roomId);
+  }
+
+  private VoiceRoomPresenceChanged presenceSnapshot(UUID projectId, UUID roomId) {
+    var room = rooms.get(roomId);
+    if (room == null) return new VoiceRoomPresenceChanged(projectId, roomId, serverId, presenceRevision.get(), maxParticipants, List.of());
+    synchronized (room) {
+      var participants = room.values().stream()
+          .filter(c -> c.joined && c.projectId.equals(projectId) && c.session.isOpen() && sessions.get(c.session.getId()) == c)
+          .map(Connection::participantView).sorted(java.util.Comparator.comparing(p -> p.get("participantId").toString())).toList();
+      return new VoiceRoomPresenceChanged(projectId, roomId, serverId, presenceRevision.get(), maxParticipants, participants);
+    }
+  }
+
+  private void publishPresence(UUID projectId, UUID roomId) {
+    presenceRevision.incrementAndGet();
+    events.publishEvent(presenceSnapshot(projectId, roomId));
   }
 
   private void relayDescription(Connection sender, JsonNode frame) {
@@ -238,7 +299,7 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
       sendError(sender, "INVALID_RECIPIENT", "Falta el destinatario de la señalización.");
       return null;
     }
-    ConcurrentMap<String, Connection> room = rooms.get(sender.projectId);
+    ConcurrentMap<String, Connection> room = rooms.get(sender.roomId);
     Connection recipient = room == null ? null : room.get(frame.path("toParticipantId").asText());
     if (recipient == null || recipient == sender || !recipient.joined
         || sessions.get(recipient.session.getId()) != recipient || !recipient.session.isOpen()) {
@@ -249,7 +310,7 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
   }
 
   private boolean requireJoined(Connection connection) {
-    ConcurrentMap<String, Connection> room = rooms.get(connection.projectId);
+    ConcurrentMap<String, Connection> room = connection.roomId == null ? null : rooms.get(connection.roomId);
     if (connection.joined && room != null && room.get(connection.participantId) == connection
         && sessions.get(connection.session.getId()) == connection && connection.session.isOpen()) return true;
     sendError(connection, "NOT_IN_ROOM", "Debes entrar a la sala antes de enviar señalización.");
@@ -327,6 +388,7 @@ public class ProjectVoiceWebSocketHandler extends TextWebSocketHandler {
     private final String email;
     private final String name;
     private final String participantId;
+    private volatile UUID roomId;
     private volatile boolean joined;
     private volatile boolean muted = true;
 

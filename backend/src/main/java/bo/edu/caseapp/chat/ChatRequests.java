@@ -8,6 +8,8 @@ import java.util.UUID;
 public final class ChatRequests {
   private ChatRequests() {}
 
+  public record ChannelName(@NotBlank @Size(max = 100) String name) {}
+
   public record SendMessage(
       @NotNull UUID clientMessageId,
       @NotBlank @Size(max = 4000) String content,

@@ -223,6 +223,7 @@ class AiAnalysisPostgresIT {
   @Test void recommendationsReachTwoRealAuthorizedWebSocketsAndNeverContainOtherUsersPrivateConversation() throws Exception {
     Inbox ana=new Inbox(), bruno=new Inbox(); connect(owner,project.getId(),ana); connect(editor,project.getId(),bruno);
     var privateChat=conversations.create(project.getId(),editor.getEmail(),new AiConversationRequests.Create(AiConversationScope.PRIVATE,diagramId,"Privado"));
+    assertEquals("New Chat",privateChat.title());
     conversations.addQuestion(project.getId(),privateChat.id(),editor.getEmail(),new AiConversationRequests.Send(UUID.randomUUID(),"PRIVATE_MARKER_DO_NOT_SEND"));
     assertNull(ana.messages.poll(150,TimeUnit.MILLISECONDS)); assertNull(bruno.messages.poll(150,TimeUnit.MILLISECONDS));
     assertThrows(NotFoundException.class,()->conversations.get(project.getId(),privateChat.id(),owner.getEmail()));

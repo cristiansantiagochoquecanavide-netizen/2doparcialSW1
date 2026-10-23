@@ -53,8 +53,9 @@ public class AiConversationStore {
     ProjectMember member = projects.requireAccess(projectId, email);
     DiagramaClase diagram = request.diagramId() == null ? null : requireDiagram(projectId, request.diagramId());
     User owner = request.scope() == AiConversationScope.PRIVATE ? member.getUser() : null;
+    String title = request.scope() == AiConversationScope.PRIVATE ? "New Chat" : request.title().trim();
     return response(conversations.save(new AiConversation(member.getProject(), diagram, request.scope(), owner,
-        member.getUser(), request.title().trim())));
+        member.getUser(), title)));
   }
 
   @Transactional(readOnly = true)
@@ -165,7 +166,7 @@ public class AiConversationStore {
         conversationId, PageRequest.of(0, 40));
     List<PromptTurn> turns = rows.stream().filter(message -> !message.getId().equals(currentQuestionId))
         .filter(message -> message.getStatus() == AiConversationMessageStatus.COMPLETED)
-        .limit(10).map(message -> new PromptTurn(message.getSenderType() == AiConversationSenderType.AGENT ? "assistant" : "user",
+        .limit(6).map(message -> new PromptTurn(message.getSenderType() == AiConversationSenderType.AGENT ? "assistant" : "user",
             message.getSender() == null ? "ACODI" : message.getSender().getName(), message.getContent()))
         .toList();
     List<PromptTurn> chronological = new ArrayList<>(turns);

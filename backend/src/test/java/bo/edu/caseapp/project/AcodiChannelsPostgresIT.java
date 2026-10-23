@@ -148,6 +148,97 @@ class AcodiChannelsPostgresIT {
     for(int i=0;i<3;i++){worker.runOnce();assertEquals("FALLIDO",current(q.id()).acodi().status());if(i<2){jdbc.update("UPDATE acodi_channel_job SET retry_after=now()-interval '1 second'");store.retry(project.getId(),general,q.id(),owner.getEmail(),new AcodiStore.Retry(UUID.randomUUID(),diagram));}}
     jdbc.update("UPDATE acodi_channel_job SET retry_after=now()-interval '1 second'");assertThrows(ConflictException.class,()->store.retry(project.getId(),general,q.id(),owner.getEmail(),new AcodiStore.Retry(UUID.randomUUID(),diagram)));assertEquals(1,count("project_chat_message"));verify(provider,times(3)).chat(anyList(),anyInt(),any());
   }
+  @Test void collaboratorsIncludingReadersManageChannelsWithoutLosingExistingHistory() {
+    var previous=send("Historial público anterior",owner);
+    var membership=members.findByProjectIdAndUserId(project.getId(),editor.getId()).orElseThrow();membership.setRole(ProjectRole.LECTOR);members.save(membership);
+    var created=chat.createChannel(project.getId(),editor.getEmail(),"TEXT",new ChatRequests.ChannelName("Equipo"));
+    chat.renameChannel(project.getId(),created.id(),owner.getEmail(),"TEXT",new ChatRequests.ChannelName("Arquitectura"));
+    var message=chat.send(project.getId(),created.id(),editor.getEmail(),new ChatRequests.SendMessage(UUID.randomUUID(),"Mensaje conservado",null)).message();
+    assertEquals("Arquitectura",chat.listChannels(project.getId(),editor.getEmail()).stream().filter(c->c.id().equals(created.id())).findFirst().orElseThrow().name());
+    chat.deleteChannel(project.getId(),created.id(),editor.getEmail(),"TEXT",false);
+    assertFalse(chat.listChannels(project.getId(),owner.getEmail()).stream().anyMatch(c->c.id().equals(created.id())));
+    assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM project_chat_message WHERE id=?",Integer.class,message.id()));
+    assertEquals(previous.id(),chat.history(project.getId(),general,editor.getEmail(),null,50).messages().getFirst().id());
+    assertThrows(NotFoundException.class,()->chat.history(project.getId(),created.id(),owner.getEmail(),null,50));
+    assertThrows(BadRequestException.class,()->chat.deleteChannel(project.getId(),general,owner.getEmail(),"TEXT",false));
+    verifyNoInteractions(provider);
+  }
+
+  @Test void channelManagementEndpointsValidateJwtProjectAndNames() throws Exception {
+    String base="/api/projects/"+project.getId()+"/chat/channels";
+    assertEquals(403,channelHttp(base,"POST","{\"name\":\"Equipo\"}",null).statusCode());
+    assertEquals(403,channelHttp(base,"POST","{\"name\":\"Equipo\"}",outsider).statusCode());
+    assertEquals(400,channelHttp(base,"POST","{\"name\":\" \"}",editor).statusCode());
+    var response=channelHttp(base,"POST","{\"name\":\"Pruebas\"}",editor);assertEquals(201,response.statusCode());UUID id=UUID.fromString(mapper.readTree(response.body()).path("id").asText());
+    assertEquals(200,channelHttp(base+"/"+id,"PATCH","{\"name\":\"Renombrado\"}",owner).statusCode());
+    assertEquals(204,channelHttp(base+"/"+id,"DELETE",null,editor).statusCode());
+    String voiceBase="/api/projects/"+project.getId()+"/chat/voice-rooms";
+    var room=channelHttp(voiceBase,"POST","{\"name\":\"Audio\"}",editor);assertEquals(201,room.statusCode());
+    String roomPath=voiceBase+"/"+mapper.readTree(room.body()).path("id").asText();
+    assertEquals(200,channelHttp(roomPath,"PATCH","{\"name\":\"Audio dos\"}",owner).statusCode());
+    assertEquals(409,channelHttp(roomPath,"DELETE",null,editor).statusCode());
+    assertEquals(204,channelHttp(roomPath+"?confirmDisconnect=true","DELETE",null,editor).statusCode());
+    assertThrows(ForbiddenException.class,()->chat.renameChannel(UUID.randomUUID(),general,owner.getEmail(),"TEXT",new ChatRequests.ChannelName("Ajeno")));
+    verifyNoInteractions(provider);
+  }
+
+  @Test void channelMetadataSynchronizesToTwoMembersAndNeverToAnotherProject() throws Exception {
+    Inbox a=connect(owner,project.getId()),b=connect(editor,project.getId());
+    var other=projects.save(new Project(outsider,"Ajeno",""));members.save(new ProjectMember(other,outsider,ProjectRole.PROPIETARIO));Inbox foreign=connect(outsider,other.getId());
+    var c=chat.createChannel(project.getId(),editor.getEmail(),"TEXT",new ChatRequests.ChannelName("Revisión"));
+    for(var inbox:List.of(a,b)){String frame=inbox.messages.poll(3,TimeUnit.SECONDS);assertNotNull(frame);assertTrue(frame.contains("PROJECT_CHANNELS_CHANGED"));assertTrue(frame.contains(c.id().toString()));}
+    assertNull(foreign.messages.poll(200,TimeUnit.MILLISECONDS));
+    chat.renameChannel(project.getId(),c.id(),owner.getEmail(),"TEXT",new ChatRequests.ChannelName("Otro nombre"));
+    for(var inbox:List.of(a,b))assertTrue(inbox.messages.poll(3,TimeUnit.SECONDS).contains("RENAMED"));
+    chat.deleteChannel(project.getId(),c.id(),editor.getEmail(),"TEXT",false);
+    for(var inbox:List.of(a,b))assertTrue(inbox.messages.poll(3,TimeUnit.SECONDS).contains("DELETED"));
+    assertNull(foreign.messages.poll(200,TimeUnit.MILLISECONDS));verifyNoInteractions(provider);
+  }
+
+  @Test void privateCreationRenameAndDeletionKeepOwnershipAndOtherHistoriesIsolated() throws Exception {
+    Inbox group=connect(owner,project.getId());
+    var first=conversations.create(project.getId(),editor.getEmail(),new AiConversationRequests.Create(AiConversationScope.PRIVATE,diagram,"Notas uno"));
+    var second=conversations.create(project.getId(),editor.getEmail(),new AiConversationRequests.Create(AiConversationScope.PRIVATE,diagram,"Notas dos"));
+    conversations.addQuestion(project.getId(),first.id(),editor.getEmail(),new AiConversationRequests.Send(UUID.randomUUID(),"Privado uno"));
+    var q=conversations.addQuestion(project.getId(),second.id(),editor.getEmail(),new AiConversationRequests.Send(UUID.randomUUID(),"Privado dos"));
+    conversations.rename(project.getId(),second.id(),editor.getEmail(),new AiConversationRequests.Rename("Decisiones personales"));
+    assertThrows(NotFoundException.class,()->conversations.get(project.getId(),first.id(),owner.getEmail()));
+    assertThrows(NotFoundException.class,()->conversations.delete(project.getId(),first.id(),owner.getEmail()));
+    assertThrows(NotFoundException.class,()->conversations.history(project.getId(),second.id(),owner.getEmail(),null,50));
+    assertThrows(ForbiddenException.class,()->conversations.get(project.getId(),second.id(),outsider.getEmail()));
+    conversations.delete(project.getId(),first.id(),editor.getEmail());
+    assertEquals(q.question().id(),conversations.history(project.getId(),second.id(),editor.getEmail(),null,50).messages().getFirst().id());
+    assertEquals("Decisiones personales",conversations.get(project.getId(),second.id(),editor.getEmail()).title());
+    assertTrue(conversations.list(project.getId(),owner.getEmail(),false).isEmpty());
+    assertNull(group.messages.poll(300,TimeUnit.MILLISECONDS));verifyNoInteractions(provider);
+  }
+
+  @Test void separateVoiceRoomsRejectCrossRoomSignalsAndConfirmedDeletionDisconnectsOnlyItsMembers() throws Exception {
+    var room=chat.voiceRooms(project.getId(),owner.getEmail()).getFirst();
+    var other=chat.createChannel(project.getId(),editor.getEmail(),"VOICE",new ChatRequests.ChannelName("Revisión de audio"));
+    chat.renameChannel(project.getId(),other.id(),editor.getEmail(),"VOICE",new ChatRequests.ChannelName("Equipo dos"));
+    Inbox a=connectVoice(owner),b=connectVoice(editor);WebSocket wa=sockets.get(sockets.size()-2),wb=sockets.getLast();
+    var readyA=mapper.readTree(a.messages.poll(3,TimeUnit.SECONDS));var readyB=mapper.readTree(b.messages.poll(3,TimeUnit.SECONDS));
+    wa.sendText("{\"type\":\"VOICE_JOIN\",\"roomId\":\""+UUID.randomUUID()+"\"}",true).join();
+    assertTrue(a.messages.poll(3,TimeUnit.SECONDS).contains("ROOM_UNAVAILABLE"));
+    wa.sendText("{\"type\":\"VOICE_JOIN\",\"roomId\":\""+room.id()+"\"}",true).join();
+    wb.sendText("{\"type\":\"VOICE_JOIN\",\"roomId\":\""+other.id()+"\"}",true).join();
+    assertTrue(a.messages.poll(3,TimeUnit.SECONDS).contains("VOICE_JOINED"));assertTrue(b.messages.poll(3,TimeUnit.SECONDS).contains("VOICE_JOINED"));
+    wa.sendText("{\"type\":\"VOICE_OFFER\",\"toParticipantId\":\""+readyB.path("participantId").asText()+"\",\"description\":{\"type\":\"offer\",\"sdp\":\"v=0\"}}",true).join();
+    assertTrue(a.messages.poll(3,TimeUnit.SECONDS).contains("RECIPIENT_UNAVAILABLE"));assertNull(b.messages.poll(200,TimeUnit.MILLISECONDS));
+    assertThrows(ConflictException.class,()->chat.deleteChannel(project.getId(),room.id(),editor.getEmail(),"VOICE",false));
+    chat.deleteChannel(project.getId(),room.id(),editor.getEmail(),"VOICE",true);
+    assertTrue(a.messages.poll(3,TimeUnit.SECONDS).contains("VOICE_ROOM_DELETED"));assertNull(b.messages.poll(200,TimeUnit.MILLISECONDS));
+    assertTrue(chat.voiceRooms(project.getId(),owner.getEmail()).stream().anyMatch(c->c.id().equals(other.id()) && c.name().equals("Equipo dos")));
+    assertFalse(chat.voiceRooms(project.getId(),owner.getEmail()).stream().anyMatch(c->c.id().equals(room.id())));verifyNoInteractions(provider);
+  }
+
+  java.net.http.HttpResponse<String> channelHttp(String path,String method,String body,User user) throws Exception {
+    var builder=java.net.http.HttpRequest.newBuilder(URI.create("http://localhost:"+port+path)).header("Content-Type","application/json");
+    if(user!=null)builder.header("Authorization","Bearer "+jwt.createToken(user.getEmail()));
+    return HttpClient.newHttpClient().send(builder.method(method,body==null?java.net.http.HttpRequest.BodyPublishers.noBody():java.net.http.HttpRequest.BodyPublishers.ofString(body)).build(),java.net.http.HttpResponse.BodyHandlers.ofString());
+  }
+  Inbox connectVoice(User user){Inbox inbox=new Inbox();sockets.add(HttpClient.newHttpClient().newWebSocketBuilder().header("Origin","http://localhost:5173").subprotocols("case-events-v1","bearer."+jwt.createToken(user.getEmail())).buildAsync(URI.create("ws://localhost:"+port+"/ws/projects/"+project.getId()+"/voice"),inbox).join());return inbox;}
   String path(){return "/api/projects/"+project.getId()+"/chat/channels/"+general+"/messages";}
   Inbox connect(User user,UUID projectId){Inbox inbox=new Inbox();var socket=HttpClient.newHttpClient().newWebSocketBuilder().header("Origin","http://localhost:5173").subprotocols("case-events-v1","bearer."+jwt.createToken(user.getEmail())).buildAsync(URI.create("ws://localhost:"+port+"/ws/projects/"+projectId+"/chat"),inbox).join();sockets.add(socket);return inbox;}
   static class Inbox implements WebSocket.Listener {final BlockingQueue<String> messages=new LinkedBlockingQueue<>();final StringBuilder text=new StringBuilder();@Override public void onOpen(WebSocket ws){ws.request(1);}@Override public CompletionStage<?> onText(WebSocket ws,CharSequence part,boolean last){text.append(part);if(last){messages.add(text.toString());text.setLength(0);}ws.request(1);return null;}}

@@ -3,6 +3,7 @@ import { useAgentSpeech } from './AgentSpeechUI'
 
 type ConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed'
 type Participant = { participantId: string; name: string; muted: boolean; connectionState: ConnectionState | 'waiting' }
+export type VoiceRoomPresence = { projectId: string; roomId: string; serverId: string; revision: number; maxParticipants: number; participants: Participant[] }
 type IceServerConfig = { urls: string | string[]; username?: string; credential?: string }
 type PeerState = {
   pc: RTCPeerConnection
@@ -18,7 +19,7 @@ type VoiceEvent = {
   muted?: boolean; description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit
   maxParticipants?: number; iceServers?: IceServerConfig[]
 }
-type Props = { projectId: string; token: string; currentUserName: string; onBackToChat: () => void }
+type Props = { projectId: string; token: string; currentUserName: string; onBackToChat: () => void; roomId?: string; roomName?: string }
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || ''
 
@@ -31,7 +32,7 @@ function friendlyMediaError(error: unknown) {
   return 'No se pudo iniciar el micrófono. Comprueba el dispositivo y sus permisos.'
 }
 
-export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: Props) {
+export function VoiceRoom({ projectId, token, currentUserName, onBackToChat, roomId, roomName = 'Sala de diseño' }: Props) {
   const speech = useAgentSpeech()
   const [status, setStatus] = useState<'idle' | 'requesting' | 'connecting' | 'connected' | 'reconnecting' | 'error'>('idle')
   const [muted, setMuted] = useState(true)
@@ -39,7 +40,9 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
   const [errorText, setErrorText] = useState('')
   const [playbackBlocked, setPlaybackBlocked] = useState(false)
   const [volume, setVolume] = useState(1)
-  const [limit, setLimit] = useState<number | null>(null)
+  const [limit, setLimit] = useState(6)
+  const [observedPresence, setObservedPresence] = useState<VoiceRoomPresence | null>(null)
+  const [presenceError, setPresenceError] = useState('')
   const [joinedBefore, setJoinedBefore] = useState(false)
   const socketRef = useRef<WebSocket | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -62,6 +65,55 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
   ownNameRef.current = currentUserName
   useEffect(() => { speech.room(status === 'connected', !muted) }, [status, muted, speech.room])
   useEffect(() => () => speech.room(false, false), [speech.room])
+
+  // Observe the existing server room without requesting media or opening signaling.
+  useEffect(() => {
+    let active = true, requestNumber = 0
+    let current: VoiceRoomPresence | null = null
+    let controller: AbortController | undefined
+    setObservedPresence(null); setPresenceError('')
+    if (!roomId) return
+    function apply(next: VoiceRoomPresence) {
+      if (!active || next.projectId !== projectId || next.roomId !== roomId || !Array.isArray(next.participants)) return
+      if (current?.serverId === next.serverId && current.revision > next.revision) return
+      current = next; setObservedPresence(next); setLimit(next.maxParticipants); setPresenceError('')
+    }
+    async function refresh() {
+      const request = ++requestNumber
+      controller?.abort(); controller = new AbortController()
+      try {
+        const response = await fetch(`${apiBase}/api/projects/${projectId}/chat/voice-rooms/${roomId}/participants`, {
+          headers: { Authorization: 'Bearer ' + token }, signal: controller.signal
+        })
+        if (!response.ok) throw new Error('No se pudo consultar la presencia de la sala.')
+        const next = await response.json() as VoiceRoomPresence
+        if (request === requestNumber) apply(next)
+      } catch (error) {
+        if (active && request === requestNumber && !(error instanceof DOMException && error.name === 'AbortError')) {
+          setPresenceError('No se pudo actualizar la lista de participantes.'); setObservedPresence(null)
+        }
+      }
+    }
+    function onPresence(event: Event) {
+      const next = (event as CustomEvent<VoiceRoomPresence>).detail
+      if (next?.projectId !== projectId || next.roomId !== roomId) return
+      ++requestNumber; controller?.abort(); apply(next)
+    }
+    function onConnection(event: Event) {
+      const state = (event as CustomEvent<{ projectId: string; connected: boolean }>).detail
+      if (state?.projectId !== projectId) return
+      if (state.connected) void refresh()
+      else { ++requestNumber; controller?.abort(); current = null; setObservedPresence(null) }
+    }
+    window.addEventListener('case:voice-presence', onPresence)
+    window.addEventListener('case:chat-connection', onConnection)
+    void refresh()
+    return () => {
+      active = false; ++requestNumber; controller?.abort()
+      window.removeEventListener('case:voice-presence', onPresence)
+      window.removeEventListener('case:chat-connection', onConnection)
+    }
+  }, [projectId, roomId, token])
 
   const updateParticipant = useCallback((participantId: string, update: Partial<Participant>) => {
     setParticipants((current) => current.map((participant) => participant.participantId === participantId ? { ...participant, ...update } : participant))
@@ -191,9 +243,9 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
         if (reconnecting) clearPeers()
         participantIdRef.current = event.participantId || ''
         iceServersRef.current = event.iceServers || []
-        setLimit(event.maxParticipants || null)
+        setLimit(event.maxParticipants || 6)
         ownNameRef.current = event.name || currentUserName
-        if (desiredRef.current) sendSignal({ type: 'VOICE_JOIN' })
+        if (desiredRef.current) sendSignal({ type: 'VOICE_JOIN', ...(roomId ? { roomId } : {}) })
       } else if (event.type === 'VOICE_JOINED') {
         retryAttemptsRef.current = 0
         const self: Participant = { participantId: event.participantId || participantIdRef.current, name: ownNameRef.current, muted: true, connectionState: 'connected' }
@@ -217,14 +269,17 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
         const peer = makePeer(participant)
         if (peer.pc.remoteDescription) void peer.pc.addIceCandidate(event.candidate).catch(() => { if (!peer.ignoreOffer) setErrorText('No se pudo añadir un candidato ICE.') })
         else peer.pendingCandidates.push(event.candidate)
+      } else if (event.type === 'VOICE_ROOM_DELETED') {
+        setErrorText(event.message || 'Esta sala fue eliminada.'); stopSessionRef.current(true)
       } else if (event.type === 'VOICE_ERROR') {
         setErrorText(event.message || 'El servidor rechazó una operación de voz.')
-        if (event.code === 'ROOM_FULL' || event.code === 'NOT_IN_ROOM') stopSessionRef.current(true)
+        if (event.code === 'ROOM_FULL' || event.code === 'NOT_IN_ROOM' || event.code === 'ROOM_UNAVAILABLE') stopSessionRef.current(true)
       }
     }
     socket.onclose = (event) => {
       if (socketRef.current === socket) socketRef.current = null
       if (!desiredRef.current || generation !== generationRef.current) return
+      if (event.code === 4004) { setErrorText('Esta sala fue eliminada.'); stopSessionRef.current(true); return }
       if (event.code === 1008) {
         setErrorText('Tu acceso al proyecto expiró o fue revocado.'); stopSession(true); return
       }
@@ -240,7 +295,7 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
       retryDelayRef.current = Math.min(retryDelayRef.current * 2, 30000)
     }
     socket.onerror = () => socket.close()
-  }, [clearPeers, currentUserName, makePeer, projectId, receiveDescription, removePeer, sendSignal, token, updateParticipant])
+  }, [clearPeers, currentUserName, makePeer, projectId, receiveDescription, removePeer, roomId, sendSignal, token, updateParticipant])
   connectSocketRef.current = connectSocket
 
   const stopSession = useCallback((keepError = false) => {
@@ -328,10 +383,13 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
 
   const stateLabel = status === 'idle' ? 'Fuera de la sala' : status === 'requesting' ? 'Esperando permiso del micrófono' : status === 'connecting' ? 'Conectando' : status === 'connected' ? 'Conectado' : status === 'reconnecting' ? 'Reconectando' : 'Error de conexión'
 
+  const visibleParticipants = status === 'connected' ? participants : observedPresence?.participants || []
+  const presenceKnown = status === 'connected' || observedPresence !== null
+
   return (
     <section className="voice-room-card" aria-label="Sala de voz del proyecto">
       <header className="voice-room-heading">
-        <div><span className="team-section-label">SALA DE VOZ</span><h3>Sala de diseño</h3></div>
+        <div><span className="team-section-label">SALA DE VOZ</span><h3>{roomName}</h3></div>
         <span className={'voice-room-state voice-state-' + status}>{stateLabel}</span>
       </header>
       <p className="voice-room-copy">Audio en vivo entre miembros autorizados. Tu micrófono solo se solicita cuando eliges unirte.</p>
@@ -346,9 +404,9 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
         </div>
       )}
       {status === 'requesting' && <div className="voice-hint">Acepta el permiso de micrófono en el navegador.</div>}
-      <div className="voice-participants-heading">Participantes ({participants.length}{limit ? ' / ' + limit : ''})</div>
-      {participants.length === 0 ? <div className="voice-empty">{status === 'connected' ? 'Eres la única persona en la sala.' : 'No hay participantes conectados.'}</div> : (
-        <ul className="voice-participant-list">{participants.map((participant) => (
+      <div className="voice-participants-heading">Participantes ({presenceKnown ? visibleParticipants.length : '…'} / {limit})</div>
+      {visibleParticipants.length === 0 ? <div className="voice-empty">{!presenceKnown ? 'Consultando participantes…' : 'No hay participantes conectados.'}</div> : (
+        <ul className="voice-participant-list">{visibleParticipants.map((participant) => (
           <li key={participant.participantId}>
             <span className="team-avatar">{participant.name.slice(0, 1).toUpperCase()}</span>
             <span className="voice-participant-name">{participant.name}{participant.participantId === participantIdRef.current ? ' (tú)' : ''}</span>
@@ -357,11 +415,12 @@ export function VoiceRoom({ projectId, token, currentUserName, onBackToChat }: P
           </li>
         ))}</ul>
       )}
-      {participants.some((participant) => participant.participantId !== participantIdRef.current) && (
+      {status === 'connected' && participants.some((participant) => participant.participantId !== participantIdRef.current) && (
         <label className="voice-volume-control">Volumen de salida <input type="range" min="0" max="1" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
       )}
       {playbackBlocked && <button type="button" className="voice-back-btn" onClick={resumePlayback}>Activar audio de participantes</button>}
       {errorText && <div className="voice-error" role="alert">{errorText}</div>}
+      {presenceError && status !== 'connected' && <div className="voice-error" role="alert">{presenceError}</div>}
       <button type="button" className="voice-back-btn" onClick={onBackToChat}>Volver al chat</button>
       <div ref={audioHostRef} className="voice-audio-host" aria-hidden="true" />
     </section>

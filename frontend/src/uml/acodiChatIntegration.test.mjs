@@ -12,7 +12,7 @@ test('team navigation has exactly two tabs and conversation histories are part o
   const code = await readFile(new URL('./LiveTeamChatPanel.tsx', import.meta.url), 'utf8')
   assert.equal((code.match(/className=\{'team-subtab-btn /g) || []).length, 2)
   assert.ok(!code.includes('Herramientas ACODI')); assert.ok(!code.includes("activeTab === 'ai'"))
-  assert.match(code, /Historiales y chats privados/); assert.match(code, /chatOnly/)
+  assert.match(code, /TeamChannelNavigation/); assert.match(code, /chatOnly navigationHidden/)
   assert.match(code, /team-content-split" hidden=\{activeTab !== 'chat'\}/)
 })
 test('chat conversation view keeps private/group navigation without proposal or memory panels', async () => {

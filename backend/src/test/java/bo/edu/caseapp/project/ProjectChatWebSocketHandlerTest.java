@@ -88,6 +88,20 @@ class ProjectChatWebSocketHandlerTest {
     assertEquals(TransactionPhase.AFTER_COMMIT, phaseOf("onAiConversationMessageCommitted", AiConversationMessageCommittedEvent.class));
   }
 
+  @Test void voicePresenceReusesChatAndNeverReachesAnotherProjectOrRevokedObserver() throws Exception {
+    UUID project = UUID.randomUUID();
+    var observer = session(project, "observer@test");
+    var foreign = session(UUID.randomUUID(), "foreign@test");
+    var revoked = session(project, "revoked@test");
+    handler.afterConnectionEstablished(observer); handler.afterConnectionEstablished(foreign); handler.afterConnectionEstablished(revoked);
+    doThrow(new bo.edu.caseapp.error.ForbiddenException("revoked")).when(projects).requireAccess(project, "revoked@test");
+    handler.onVoiceRoomPresenceChanged(new bo.edu.caseapp.voice.VoiceRoomPresenceChanged(project, UUID.randomUUID(), "server", 1L, 6,
+        java.util.List.of(Map.of("participantId", "raul", "name", "Raúl", "muted", true, "connectionState", "connected"))));
+    verify(observer).sendMessage(argThat((TextMessage f) -> f.getPayload().contains("VOICE_ROOM_PRESENCE") && f.getPayload().contains("Raúl")));
+    verify(foreign, never()).sendMessage(any()); verify(revoked, never()).sendMessage(any());
+    verify(revoked).close(CloseStatus.POLICY_VIOLATION);
+  }
+
   private WebSocketSession session(UUID projectId, String email) {
     WebSocketSession session = mock(WebSocketSession.class);
     when(session.getId()).thenReturn(UUID.randomUUID().toString());

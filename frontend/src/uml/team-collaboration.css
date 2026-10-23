@@ -1088,3 +1088,46 @@
 .ai-chat-only .ai-conversation-messages { flex:1 1 0%; overflow:auto; }
 .ai-chat-only .ai-compose { flex-wrap:wrap; flex-shrink:0; }
 .ai-chat-only .ai-compose textarea { flex:1 1 100%; }
+
+/* A single navigation with independent scroll; the composer never participates in message scroll. */
+.team-panel { container-type: inline-size; }
+.team-channel-sidebar { width: 160px; flex-basis: 160px; min-height: 0; overscroll-behavior: contain; }
+.team-nav-section { flex-shrink: 0; margin: 0; padding: 0; }
+.team-nav-heading { display: flex; align-items: center; gap: 4px; justify-content: space-between; padding: 8px 4px 4px; font-size: 10px; font-weight: 700; color: #64748b; }
+.team-nav-heading button,.team-nav-options { border: 0; background: transparent; color: #475569; cursor: pointer; padding: 3px 6px; font-size: 17px; flex-shrink: 0; }
+.team-nav-entry { position: relative; }
+.team-nav-entry.menu-open { z-index: 10; }
+.team-nav-row { display: flex; align-items: center; min-width: 0; }
+.team-nav-row .team-channel-link { flex: 1; min-width: 0; }
+.team-nav-options { font-size: 16px; }
+.team-nav-menu { position: absolute; z-index: 20; right: 2px; bottom: calc(100% - 2px); display: grid; min-width: 126px; gap: 2px; padding: 4px; background: #fff; border: 1px solid #cbd5e1; border-radius: 7px; box-shadow: 0 8px 24px #0f172a2b; }
+.team-nav-menu button { color: #1e293b; text-align: left; white-space: nowrap; background: transparent; border: 0; border-radius: 4px; padding: 7px 8px; font-size: 11px; cursor: pointer; }
+.team-nav-menu button:hover { background: #f1f5f9; }
+.team-nav-menu button:disabled { opacity: .45; cursor: default; }
+.team-chat-area { min-width: 0; min-height: 0; overflow: hidden; margin: 0; padding: 0; border-radius: 0; }
+.team-messages-scroll,.ai-conversation-messages { min-height: 0; overscroll-behavior: contain; overflow-anchor: none; }
+.ai-conversation-main { min-width: 0; margin: 0; padding: 0; border-radius: 0; }
+.ai-message .team-message-content { margin: 6px 0; font-size: 13px; line-height: 1.5; }
+.team-msg-body > button,.ai-message > button { width: auto; font-size: 11px; padding: 4px 8px; }
+.team-message-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.team-expand-message { display: block; border: 0; background: transparent; color: #1d4ed8; padding: 5px 0; cursor: pointer; font-size: 11px; }
+.team-chat-header { flex-shrink: 0; }
+.team-chat-area .voice-room-card { min-height: 0; overflow-y: auto; }
+.ai-chat-only .ai-context-toolbar { flex-shrink: 0; overflow-wrap: anywhere; }
+.ai-chat-only .ai-compose { padding: 8px; gap: 6px; }
+.ai-chat-only .ai-compose textarea { box-sizing: border-box; max-height: 110px; min-width: 0; resize: vertical; }
+@container (max-width: 400px) {
+  .team-channel-sidebar { width: 112px; flex-basis: 112px; padding: 4px 2px; }
+  .team-nav-heading { font-size: 9px; padding-left: 2px; }
+  .team-nav-heading button,.team-nav-options { padding: 2px 3px; }
+  .team-nav-row .team-channel-link { padding: 6px 3px; gap: 3px; }
+  .team-input-form { padding: 6px; }
+  .team-input-scope-indicator,.team-input-hint { display: none; }
+  .team-input-bar { gap: 5px; }
+  .team-input-bar textarea { flex-basis: 100%; }
+  .team-messages-scroll { padding: 7px; }
+  .team-message-card { gap: 4px; }
+  .team-msg-avatar { display: none; }
+  .team-msg-header { flex-wrap: wrap; gap: 3px; }
+  .ai-chat-only .ai-compose button { max-width: 100%; }
+}

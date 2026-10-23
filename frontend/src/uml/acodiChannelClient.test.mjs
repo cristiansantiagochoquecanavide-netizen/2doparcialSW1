@@ -60,8 +60,8 @@ test('canonical recommendation ID deduplicates historical-conversation and chann
 test('channel switching retains the chat and voice components while controls wrap in narrow panels', async () => {
   const source = await readFile(new URL('./LiveTeamChatPanel.tsx', import.meta.url), 'utf8')
   const css = await readFile(new URL('./team-collaboration.css', import.meta.url), 'utf8')
-  assert.match(source, /drafts\.current\.set\(activeChannelId, input\)/); assert.match(source, /selectChannel\(channel.id\)/)
-  assert.match(source, /<VoiceRoom key=\{projectId \+ ':' \+ token\}/); assert.match(source, /hidden=\{activeTab !== 'voice'\}/)
+  assert.match(source, /drafts\.current\.set\(activeChannelId, input\)/); assert.match(source, /selectChannel\(item.id\)/)
+  assert.match(source, /<VoiceRoom key=\{projectId \+ ':' \+ token \+ ':' \+ selectedVoice\}/); assert.match(source, /hidden=\{view !== 'voice'\}/)
   assert.match(source, /composerRef\.current\?\.focus/); assert.match(source, /diagramId \}/)
   assert.match(css, /\.team-input-bar \{ flex-wrap: wrap/); assert.match(css, /\.team-input-form \{ flex-shrink: 0/)
 })

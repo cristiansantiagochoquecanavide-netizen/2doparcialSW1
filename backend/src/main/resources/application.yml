@@ -33,7 +33,7 @@ app:
   ai:
     acodi:
       poll-ms: ${ACODI_POLL_MS:1000}
-      max-output-tokens: ${ACODI_MAX_OUTPUT_TOKENS:600}
+      max-output-tokens: ${ACODI_MAX_OUTPUT_TOKENS:300}
       max-attempts: ${ACODI_MAX_ATTEMPTS:3}
       max-calls: ${ACODI_MAX_CALLS:30}
     provider: ${AI_PROVIDER:groq}
@@ -42,7 +42,7 @@ app:
       chat: ${AI_MAX_OUTPUT_TOKENS_CHAT:800}
       command: ${AI_MAX_OUTPUT_TOKENS_COMMAND:800}
       image: ${AI_MAX_OUTPUT_TOKENS_IMAGE:1500}
-      conversation: ${AI_MAX_OUTPUT_TOKENS_CONVERSATION:1000}
+      conversation: ${AI_MAX_OUTPUT_TOKENS_CONVERSATION:300}
       proposal: ${AI_MAX_OUTPUT_TOKENS_PROPOSAL:1800}
     # Proactive analysis reserves budget before invoking Groq; explicit chat keeps its allowance.
     project-budget-tokens: ${AI_PROJECT_BUDGET_TOKENS:100000}

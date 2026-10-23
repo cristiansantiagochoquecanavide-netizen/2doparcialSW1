@@ -362,6 +362,7 @@ function WorkspaceChromeContent(p: Props) {
 
                 <div className="team-panel-host" hidden={rightPanelMode !== 'team'}>
                   <LiveTeamChatPanel
+                    key={p.projectId + ':' + p.token}
                     projectId={p.projectId}
                     diagramId={p.diagram?.id ?? null}
                     projectName={p.projectName}
