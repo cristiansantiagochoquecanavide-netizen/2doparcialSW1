@@ -32,6 +32,12 @@ public class ProjectChatChannel {
   @Column(length = 500)
   private String description;
 
+  @Column(name = "channel_type", nullable = false, length = 8)
+  private String channelType = "TEXT";
+
+  @Column(name = "archived_at")
+  private Instant archivedAt;
+
   @Column(name = "sort_order", nullable = false)
   private short sortOrder;
 
@@ -55,4 +61,9 @@ public class ProjectChatChannel {
   public String getDescription() { return description; }
   public short getSortOrder() { return sortOrder; }
   public Instant getCreatedAt() { return createdAt; }
+  public String getChannelType() { return channelType; }
+  public Instant getArchivedAt() { return archivedAt; }
+  public void setChannelType(String value) { channelType = value; }
+  public void rename(String value) { name = value; }
+  public void archive() { archivedAt = Instant.now(); }
 }

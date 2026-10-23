@@ -51,6 +51,7 @@ public class ProjectChatService {
     projects.requireAccess(projectId, email);
     channels.ensureDefaultChannels(projectId);
     return channels.findByProjectIdOrderBySortOrderAscNameAsc(projectId).stream()
+        .filter(channel -> channel.getArchivedAt() == null && "TEXT".equals(channel.getChannelType()))
         .map(channel -> new Channel(channel.getId(), channel.getSlug(), channel.getName(), channel.getDescription(), channel.getCreatedAt()))
         .toList();
   }
@@ -128,6 +129,7 @@ public class ProjectChatService {
 
   private ProjectChatChannel channel(UUID projectId, UUID channelId) {
     return channels.findByIdAndProjectId(channelId, projectId)
+        .filter(value -> value.getArchivedAt() == null && "TEXT".equals(value.getChannelType()))
         .orElseThrow(() -> new NotFoundException("Canal no encontrado en este proyecto."));
   }
 
@@ -181,7 +183,64 @@ public class ProjectChatService {
   @Transactional
   public void publishRecommendation(UUID projectId,String email,String content,UUID canonicalId) {
     projects.requireAccess(projectId,email);channels.ensureDefaultChannels(projectId);
-    var target=channels.findByProjectIdOrderBySortOrderAscNameAsc(projectId).stream().filter(c->c.getSlug().equals("diseno-uml")).findFirst().orElseThrow();
+    var available=channels.findByProjectIdOrderBySortOrderAscNameAsc(projectId).stream().filter(c->c.getArchivedAt()==null && "TEXT".equals(c.getChannelType())).toList();
+    var target=available.stream().filter(c->c.getSlug().equals("diseno-uml")).findFirst().orElseGet(()->available.stream().filter(c->c.getSlug().equals("general")).findFirst().orElseThrow());
     publishAgent(projectId,target.getId(),email,content,null,canonicalId);
+  }
+
+  @Transactional
+  public List<Channel> voiceRooms(UUID projectId, String email) {
+    projects.requireAccess(projectId, email);
+    channels.ensureDefaultChannels(projectId);
+    return channels.findByProjectIdOrderBySortOrderAscNameAsc(projectId).stream()
+        .filter(value -> value.getArchivedAt() == null && "VOICE".equals(value.getChannelType()))
+        .map(this::channelResponse).toList();
+  }
+
+  @Transactional
+  public Channel createChannel(UUID projectId, String email, String type, ChatRequests.ChannelName request) {
+    var member = projects.requireAccess(projectId, email);
+    if (!java.util.Set.of("TEXT", "VOICE").contains(type)) throw new BadRequestException("Tipo de canal inválido.");
+    var channel = new ProjectChatChannel(member.getProject(), "channel-" + UUID.randomUUID(), validName(request.name()), null, (short) 10);
+    channel.setChannelType(type);
+    channels.saveAndFlush(channel);
+    events.publishEvent(new ProjectChannelsChanged(projectId, channel.getId(), type, "CREATED"));
+    return channelResponse(channel);
+  }
+
+  @Transactional
+  public Channel renameChannel(UUID projectId, UUID channelId, String email, String type, ChatRequests.ChannelName request) {
+    projects.requireAccess(projectId, email);
+    var value = managedChannel(projectId, channelId, type);
+    value.rename(validName(request.name()));
+    events.publishEvent(new ProjectChannelsChanged(projectId, channelId, type, "RENAMED"));
+    return channelResponse(value);
+  }
+
+  @Transactional
+  public void deleteChannel(UUID projectId, UUID channelId, String email, String type, boolean confirmed) {
+    projects.requireAccess(projectId, email);
+    var value = managedChannel(projectId, channelId, type);
+    if ("general".equals(value.getSlug())) throw new BadRequestException("No se puede eliminar #general.");
+    if ("VOICE".equals(type) && !confirmed) throw new ConflictException("Confirma la eliminación de la sala y la desconexión de sus participantes.");
+    // Logical deletion preserves messages and references from proposals and ACODI jobs.
+    value.archive();
+    events.publishEvent(new ProjectChannelsChanged(projectId, channelId, type, "DELETED"));
+  }
+
+  private ProjectChatChannel managedChannel(UUID projectId, UUID id, String type) {
+    return channels.findForManagement(id, projectId)
+        .filter(value -> value.getArchivedAt() == null && type.equals(value.getChannelType()))
+        .orElseThrow(() -> new NotFoundException("Canal no encontrado en este proyecto."));
+  }
+
+  private String validName(String name) {
+    if (name == null || name.isBlank() || name.trim().length() > 100 || name.chars().anyMatch(Character::isISOControl))
+      throw new BadRequestException("El nombre debe tener entre 1 y 100 caracteres válidos.");
+    return name.trim();
+  }
+
+  private Channel channelResponse(ProjectChatChannel value) {
+    return new Channel(value.getId(), value.getSlug(), value.getName(), value.getDescription(), value.getCreatedAt());
   }
 }

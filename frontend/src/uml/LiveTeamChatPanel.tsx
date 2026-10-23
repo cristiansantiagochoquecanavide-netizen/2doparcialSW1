@@ -1,9 +1,10 @@
 import React, { FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ChatIcon, UsersIcon, MicIcon, SendIcon, VolumeIcon, HashIcon, MaximizeIcon, MinimizeIcon } from './icons'
-import { VoiceRoom } from './VoiceRoom'
+import { VoiceRoom, type VoiceRoomPresence } from './VoiceRoom'
 import { AiConversationsPanel } from './AiConversationsPanel'
 import { useAgentSpeech } from './AgentSpeechUI'
 import { AcodiChannelMessage } from './AcodiChannelMessage'
+import { TeamChannelNavigation, type NavigationItem } from './TeamChannelNavigation'
 import { insertAcodiMention, channelSpeechMessage, channelRecommendationFrame } from './acodiChannelClient.mjs'
 
 export interface ChannelItem { id: string; slug: string; name: string; description: string | null; createdAt: string }
@@ -43,6 +44,7 @@ async function request<T>(path: string, token: string, options: RequestInit = {}
     try { message = (JSON.parse(raw) as { message?: string }).message || '' } catch { message = raw }
     throw new Error(message || 'No se pudo completar la operación (' + response.status + ').')
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 function messageTime(value: string) {
@@ -60,8 +62,14 @@ export function LiveTeamChatPanel({
   const [agentBusy, setAgentBusy] = useState(false)
   const [channels, setChannels] = useState<ChannelItem[]>([])
   const [activeChannelId, setActiveChannelId] = useState('')
-  const [activeTab, setActiveTab] = useState<'chat' | 'members' | 'voice'>('chat')
-  const [agentConversations, setAgentConversations] = useState(false)
+  const [activeTab, setActiveTab] = useState<'chat' | 'members'>('chat')
+  const [voiceRooms, setVoiceRooms] = useState<ChannelItem[]>([])
+  const [selectedVoice, setSelectedVoice] = useState('')
+  const [privateChats, setPrivateChats] = useState<{ id: string; title: string; scope: 'PRIVATE' | 'GROUP' }[]>([])
+  const [selectedConversation, setSelectedConversation] = useState('')
+  const [navigationBusy, setNavigationBusy] = useState(false)
+  const [navigationError, setNavigationError] = useState('')
+  const [view, setView] = useState<'text' | 'voice' | 'ai'>('text')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [reload, setReload] = useState(0)
@@ -69,6 +77,13 @@ export function LiveTeamChatPanel({
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({})
   const [pages, setPages] = useState<Record<string, PageState>>({})
   const [input, setInput] = useState('')
+  const lastDraftChannel = useRef(''), inputSnapshot = useRef(input)
+  inputSnapshot.current = input
+  useEffect(() => {
+    drafts.current.set(lastDraftChannel.current, inputSnapshot.current)
+    lastDraftChannel.current = activeChannelId
+    setInput(drafts.current.get(activeChannelId) || '')
+  }, [activeChannelId])
   const [sending, setSending] = useState(false)
   const [retry, setRetry] = useState<Outgoing | null>(null)
   const [sendError, setSendError] = useState('')
@@ -87,10 +102,61 @@ export function LiveTeamChatPanel({
   const hasFailedAgent = activeMessages.some(message => message.acodi?.status === 'FALLIDO')
   useEffect(() => { if (!hasFailedAgent) return; const timer = window.setInterval(() => setRetryClock(value => value + 1), 2000); return () => clearInterval(timer) }, [hasFailedAgent])
   useEffect(() => {
-    if (activeTab === 'chat' && !agentConversations) speech.view({ conversationId: 'channel:' + activeChannelId, scope: 'GROUP', active: visible && Boolean(activeChannelId) })
-    else if (activeTab !== 'chat') speech.view({ conversationId: '', scope: 'GROUP', active: false })
-  }, [activeTab, activeChannelId, agentConversations, visible, speech.view])
-  function selectChannel(id: string) { drafts.current.set(activeChannelId, input); setActiveChannelId(id); setInput(drafts.current.get(id) || ''); setAgentConversations(false) }
+    if (activeTab === 'chat' && view === 'text') speech.view({ conversationId: 'channel:' + activeChannelId, scope: 'GROUP', active: visible && Boolean(activeChannelId) })
+    else if (activeTab !== 'chat' || view === 'voice') speech.view({ conversationId: '', scope: 'GROUP', active: false })
+  }, [activeTab, activeChannelId, view, visible, speech.view])
+  function selectChannel(id: string) { drafts.current.set(activeChannelId, input); setActiveChannelId(id); setView('text') }
+
+  const chatBase = '/api/projects/' + projectId + '/chat'
+  const aiBase = '/api/projects/' + projectId + '/ai/conversations'
+  const navigationQueue = useRef<Promise<unknown>>(Promise.resolve())
+  const refreshNavigation = useCallback(() => {
+    const pending = navigationQueue.current.catch(() => undefined).then(async () => {
+    const [text, voice, conversations] = await Promise.all([
+      request<ChannelItem[]>('/api/projects/' + projectId + '/chat/channels', token),
+      request<ChannelItem[]>('/api/projects/' + projectId + '/chat/voice-rooms', token),
+      request<{ id: string; title: string; scope: 'PRIVATE' | 'GROUP' }[]>('/api/projects/' + projectId + '/ai/conversations', token)
+    ])
+    setChannels(text); channelsRef.current = text; setVoiceRooms(voice); setPrivateChats(conversations)
+    setActiveChannelId(current => text.some(item => item.id === current) ? current : (text.find(item => item.slug === 'general') || text[0])?.id || '')
+    return { text, voice, conversations }
+    })
+    navigationQueue.current = pending
+    return pending
+  }, [projectId, token])
+  useEffect(() => { let alive = true; void refreshNavigation().catch(error => { if (alive) setNavigationError(error.message) }); return () => { alive = false } }, [refreshNavigation])
+  useEffect(() => {
+    if (selectedVoice && !voiceRooms.some(room => room.id === selectedVoice)) { setSelectedVoice(''); if (view === 'voice') setView('text') }
+    if (selectedConversation && !privateChats.some(chat => chat.id === selectedConversation)) { setSelectedConversation(''); if (view === 'ai') setView('text') }
+  }, [voiceRooms, privateChats, selectedVoice, selectedConversation, view])
+  function selectItem(item: NavigationItem) {
+    setNavigationError('')
+    if (item.kind === 'text') { selectChannel(item.id); return }
+    drafts.current.set(activeChannelId, input)
+    if (item.kind === 'voice') { setSelectedVoice(item.id); setView('voice') }
+    else { setSelectedConversation(item.id); setView('ai') }
+  }
+  function itemPath(item: NavigationItem) { return item.kind === 'private' || item.kind === 'legacy' ? aiBase + '/' + item.id : chatBase + (item.kind === 'voice' ? '/voice-rooms/' : '/channels/') + item.id }
+  async function manageNavigation(action: 'create' | 'rename' | 'delete', kind: 'text' | 'voice' | 'private' | 'legacy', item?: NavigationItem) {
+    if (navigationBusy) return
+    const name = action === 'create' && kind === 'private' ? 'New Chat' : action === 'delete' ? '' : window.prompt(action === 'create' ? (kind === 'voice' ? 'Nombre de la sala de voz' : 'Nombre del canal de texto') : 'Nuevo nombre', item?.name || '')?.trim()
+    if (action !== 'delete' && !name) return
+    if (action === 'delete' && !window.confirm(kind === 'voice' ? `¿Eliminar “${item?.name}” y desconectar a sus participantes?` : `¿Eliminar “${item?.name}”? Solo se eliminará esta conversación o canal.`)) return
+    setNavigationBusy(true); setNavigationError('')
+    try {
+      let created: { id: string } | undefined
+      if (action === 'create') created = await request(kind === 'private' ? aiBase : chatBase + (kind === 'voice' ? '/voice-rooms' : '/channels'), token, { method: 'POST', body: JSON.stringify(kind === 'private' ? { title: 'New Chat', scope: 'PRIVATE', diagramId } : { name }) })
+      else if (item) await request(itemPath(item) + (action === 'delete' && kind === 'voice' ? '?confirmDisconnect=true' : ''), token, { method: action === 'delete' ? 'DELETE' : 'PATCH', ...(action === 'rename' ? { body: JSON.stringify(kind === 'private' || kind === 'legacy' ? { title: name } : { name }) } : {}) })
+      await refreshNavigation()
+      if (created) selectItem({ id: created.id, name: kind === 'private' ? 'New Chat' : name!, kind })
+      if (action === 'delete' && item) {
+        if (selectedConversation === item.id) { setSelectedConversation(''); setView('text') }
+        if (selectedVoice === item.id) { setSelectedVoice(''); setView('text') }
+        if (activeChannelId === item.id) { setInput(''); drafts.current.delete(item.id) }
+      }
+    } catch (error) { setNavigationError(error instanceof Error ? error.message : 'No se pudo actualizar la navegación.') }
+    finally { setNavigationBusy(false) }
+  }
   function mention() {
     const result = insertAcodiMention(input, composerRef.current?.selectionStart ?? input.length)
     if (result.text.length > 4000) { setSendError('El mensaje está lleno. Deja espacio para insertar @ACODI.'); return }
@@ -168,10 +234,18 @@ export function LiveTeamChatPanel({
       url.pathname = '/ws/projects/' + projectId + '/chat'
       url.search = ''
       socket = new WebSocket(url.toString(), ['case-events-v1', 'bearer.' + token])
-      socket.onopen = () => { delay = 1000; setConnection('connected'); speech.chat(true); void refresh().catch(() => undefined) }
+      socket.onopen = () => { delay = 1000; setConnection('connected'); speech.chat(true); window.dispatchEvent(new CustomEvent('case:chat-connection', { detail: { projectId, connected: true } })); void refreshNavigation().then(() => refresh()).catch(() => undefined) }
       socket.onmessage = (event) => {
         try {
-          const frame = JSON.parse(String(event.data)) as { type?: string; projectId?: string; channelId?: string; message?: ChatMessage }
+          const frame = JSON.parse(String(event.data)) as { type?: string; projectId?: string; channelId?: string; message?: ChatMessage; presence?: VoiceRoomPresence }
+          if (frame.type === 'VOICE_ROOM_PRESENCE' && frame.projectId === projectId && frame.presence?.projectId === projectId) {
+            window.dispatchEvent(new CustomEvent('case:voice-presence', { detail: frame.presence }))
+            return
+          }
+          if (frame.type === 'PROJECT_CHANNELS_CHANGED' && frame.projectId === projectId) {
+            void refreshNavigation().then(() => refresh()).catch(error => setNavigationError(error.message))
+            return
+          }
           if (frame.type === 'AI_CONVERSATION_MESSAGE' && frame.projectId === projectId) {
             speech.receive(frame)
             window.dispatchEvent(new CustomEvent('case:ai-message', { detail: frame }))
@@ -189,6 +263,7 @@ export function LiveTeamChatPanel({
       socket.onclose = (event) => {
         if (disposed) return
         speech.chat(false)
+        window.dispatchEvent(new CustomEvent('case:chat-connection', { detail: { projectId, connected: false } }))
         if (event.code === 1008) { setConnection('revoked'); return }
         setConnection('offline')
         timer = window.setTimeout(connect, delay)
@@ -198,7 +273,7 @@ export function LiveTeamChatPanel({
     }
     connect()
     return () => { disposed = true; speech.chat(false); if (timer !== undefined) clearTimeout(timer); socket?.close() }
-  }, [projectId, token, refresh, speech.chat, speech.receive])
+  }, [projectId, token, refresh, refreshNavigation, speech.chat, speech.receive])
 
   useEffect(() => {
     if (activeChannelId && initialLoaded) {
@@ -274,9 +349,6 @@ export function LiveTeamChatPanel({
         <button type="button" className={'team-subtab-btn ' + (activeTab === 'members' ? 'active' : '')} onClick={() => setActiveTab('members')}><UsersIcon size={13} /> Participantes ({members.length})</button>
       </div>
 
-      <div className="team-voice-view" hidden={activeTab !== 'voice'}>
-        <VoiceRoom key={projectId + ':' + token} projectId={projectId} token={token} currentUserName={currentUser.name} onBackToChat={() => setActiveTab('chat')} />
-      </div>
       {activeTab === 'members' && (
         <div className="team-members-view">
           <div className="team-virtual-agent"><span className="team-avatar">AC</span><strong>ACODI</strong><span className="role-pill">Agente IA</span><small>Agente Colaborador de Diagramado · Invócalo con @ACODI en un canal.</small></div>
@@ -293,18 +365,18 @@ export function LiveTeamChatPanel({
         </div>
       )}
         <div className="team-content-split" hidden={activeTab !== 'chat'}>
-          <nav className="team-channel-sidebar" aria-label="Canales del proyecto">
-            <div className="team-channel-group-title">CANALES DE TEXTO</div>
-            {channels.map((channel) => <button key={channel.id} type="button" className={'team-channel-link ' + (activeChannelId === channel.id ? 'active' : '')} onClick={() => selectChannel(channel.id)} title={channel.description || channel.name}><HashIcon size={13} className="channel-icon" /><span className="channel-name">{channel.name}</span></button>)}
-            <div className="team-channel-group-title">CANALES DE VOZ</div>
-            <button type="button" className="team-channel-link voice-channel" onClick={() => setActiveTab('voice')} title="Entrar a la sala de voz"><VolumeIcon size={13} className="channel-icon" /><span className="channel-name">Sala de diseño</span></button>
-            <div className="team-channel-group-title">CONVERSACIONES DE ACODI</div>
-            <button type="button" className={'team-channel-link ' + (agentConversations ? 'active' : '')} onClick={() => setAgentConversations(true)}>Historiales y chats privados</button>
-          </nav>
-          <section className="team-chat-area" hidden={!agentConversations}>
-            <AiConversationsPanel key={projectId + ':' + token} projectId={projectId} diagramId={diagramId} token={token} currentUser={currentUser} active={visible && activeTab === 'chat' && agentConversations} chatOnly />
+          <TeamChannelNavigation items={[
+            ...channels.map(channel => ({ id: channel.id, name: channel.name, kind: 'text' as const, protected: channel.slug === 'general' })),
+            ...voiceRooms.map(room => ({ id: room.id, name: room.name, kind: 'voice' as const })),
+            ...privateChats.map(chat => ({ id: chat.id, name: chat.title, kind: chat.scope === 'PRIVATE' ? 'private' as const : 'legacy' as const }))
+          ]} selected={view === 'text' ? 'text:' + activeChannelId : view === 'voice' ? 'voice:' + selectedVoice : (privateChats.find(chat => chat.id === selectedConversation)?.scope === 'GROUP' ? 'legacy:' : 'private:') + selectedConversation} busy={navigationBusy || loading} onSelect={selectItem} onCreate={kind => void manageNavigation('create', kind)} onRename={item => void manageNavigation('rename', item.kind, item)} onDelete={item => void manageNavigation('delete', item.kind, item)} />
+          <section className="team-chat-area" hidden={view !== 'voice'}>
+            {selectedVoice && <VoiceRoom key={projectId + ':' + token + ':' + selectedVoice} projectId={projectId} roomId={selectedVoice} roomName={voiceRooms.find(room => room.id === selectedVoice)?.name || 'Sala de voz'} token={token} currentUserName={currentUser.name} onBackToChat={() => setView('text')} />}
           </section>
-          <section className="team-chat-area" hidden={agentConversations}>
+          <section className="team-chat-area" hidden={view !== 'ai'}>
+            <AiConversationsPanel key={projectId + ':' + token} projectId={projectId} diagramId={diagramId} token={token} currentUser={currentUser} active={visible && activeTab === 'chat' && view === 'ai'} chatOnly navigationHidden selectedConversationId={selectedConversation} selectedConversationTitle={privateChats.find(chat => chat.id === selectedConversation)?.title} />
+          </section>
+          <section className="team-chat-area" hidden={view !== 'text'}>
             <div className="team-chat-header"><div className="team-chat-header-info"><HashIcon size={14} className="channel-icon-header" /><strong>{activeChannel?.name || 'Canales del proyecto'}</strong></div><span className="team-chat-header-desc">{activeChannel?.description || 'Mensajes visibles para miembros autorizados.'}</span></div>
             {loading ? <div className="team-state-container"><div className="team-spinner" /><p>Cargando canales y mensajes…</p></div>
               : loadError && channels.length === 0 ? <div className="team-state-container team-error-state"><h4>No se pudo cargar el chat</h4><p>{loadError}</p><button type="button" className="team-retry-btn" onClick={() => setReload((value) => value + 1)}>Reintentar</button></div>
@@ -332,6 +404,7 @@ export function LiveTeamChatPanel({
             </form>
           </section>
         </div>
+      {navigationError && <div className="team-inline-error" role="alert">{navigationError}<button type="button" onClick={() => { setNavigationError(''); void refreshNavigation().catch(error => setNavigationError(error.message)) }}>Reintentar</button></div>}
     </aside>
   )
 }

@@ -127,6 +127,23 @@ public class ProjectChatWebSocketHandler extends TextWebSocketHandler {
 
   /** Group AI messages reuse the authenticated project channel. Private turns never publish this event. */
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  public void onChannelsChanged(ProjectChannelsChanged event) {
+    Set<WebSocketSession> sessions = projectSessions.get(event.projectId());
+    if (sessions == null) return;
+    try {
+      var frame = new TextMessage(objectMapper.writeValueAsString(Map.of("type", "PROJECT_CHANNELS_CHANGED",
+          "projectId", event.projectId(), "channelId", event.channelId(), "channelType", event.channelType(), "action", event.action())));
+      for (WebSocketSession session : sessions) {
+        try {
+          projects.requireAccess(event.projectId(), (String) session.getAttributes().get(EMAIL_ATTRIBUTE));
+          synchronized (session) { if (session.isOpen()) session.sendMessage(frame); }
+        } catch (RuntimeException exception) { closeRevokedSession(session, event.projectId()); }
+        catch (IOException exception) { closeQuietly(session); }
+      }
+    } catch (IOException exception) { log.warn("No se pudo entregar la actualización de canales del proyecto {}", event.projectId()); }
+  }
+
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
   public void onAiConversationMessageCommitted(AiConversationMessageCommittedEvent event) {
     Set<WebSocketSession> sessions = projectSessions.get(event.projectId());
     if (sessions == null || sessions.isEmpty()) return;
@@ -168,6 +185,24 @@ public class ProjectChatWebSocketHandler extends TextWebSocketHandler {
         closeRevokedSession(session, event.projectId());
       }
     }
+  }
+
+  /** Reuse the project push channel, without opening voice signaling for observers. */
+  @org.springframework.context.event.EventListener
+  public void onVoiceRoomPresenceChanged(bo.edu.caseapp.voice.VoiceRoomPresenceChanged event) {
+    var sessions = projectSessions.get(event.projectId());
+    if (sessions == null) return;
+    try {
+      var frame = new TextMessage(objectMapper.writeValueAsString(Map.of("type", "VOICE_ROOM_PRESENCE",
+          "projectId", event.projectId(), "presence", event)));
+      for (WebSocketSession session : sessions) {
+        try {
+          projects.requireAccess(event.projectId(), (String) session.getAttributes().get(EMAIL_ATTRIBUTE));
+          synchronized (session) { if (session.isOpen()) session.sendMessage(frame); }
+        } catch (RuntimeException exception) { closeRevokedSession(session, event.projectId()); }
+        catch (IOException exception) { closeQuietly(session); }
+      }
+    } catch (IOException exception) { log.warn("No se pudo publicar la presencia de voz del proyecto {}", event.projectId()); }
   }
 
   private void closeRevokedSession(WebSocketSession session, UUID projectId) {

@@ -24,7 +24,7 @@ public class AiConversationService {
   @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.chat.AcodiDeletionClarification deletions;
 
   public AiConversationService(AiConversationStore store, AiOrchestrationService orchestration,
-      @Value("${app.ai.max-output-tokens.conversation:1000}") int maxOutputTokens) {
+      @Value("${app.ai.max-output-tokens.conversation:300}") int maxOutputTokens) {
     this.store = store;
     this.orchestration = orchestration;
     this.maxOutputTokens = Math.max(1, maxOutputTokens);
@@ -100,7 +100,9 @@ public class AiConversationService {
       AiOperation operation = conversation.scope() == AiConversationScope.GROUP
           ? AiOperation.AI_CONVERSATION_GROUP : AiOperation.AI_CONVERSATION_PRIVATE;
       String system = "Eres el ACODI, integrante de un equipo que diseña software y diagramas UML. "
-          + "Responde en español, de forma clara y útil. El usuario autenticado es " + question.senderName() + ". "
+          + "Responde en español normalmente en 2–4 oraciones y hasta unas 100 palabras; sé directo, sin saludos ni introducciones repetitivas. "
+          + "Prioriza problemas y recomendaciones UML importantes. Si piden detalle explícitamente, puedes extenderte; si falta información, pide una aclaración concreta. "
+          + "El usuario autenticado es " + question.senderName() + ". "
           + "En esta respuesta, dirígete por su nombre a esa persona. La conversación es "
           + (conversation.scope() == AiConversationScope.GROUP ? "grupal y compartida solo con miembros autorizados" : "privada y exclusiva de esa persona") + ". "
           + "Usa únicamente la memoria confirmada, los datos del proyecto y el contexto UML autorizado que se adjuntan. "

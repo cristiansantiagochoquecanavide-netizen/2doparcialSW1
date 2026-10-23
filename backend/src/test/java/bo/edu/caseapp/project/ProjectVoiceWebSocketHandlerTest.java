@@ -27,12 +27,52 @@ class ProjectVoiceWebSocketHandlerTest {
   private ProjectService projects;
   private ObjectMapper mapper;
   private ProjectVoiceWebSocketHandler handler;
+  private bo.edu.caseapp.chat.ProjectChatChannelRepository channels;
+  private org.springframework.context.ApplicationEventPublisher events;
 
   @BeforeEach
   void setUp() {
     projects = mock(ProjectService.class);
     mapper = new ObjectMapper();
-    handler = new ProjectVoiceWebSocketHandler(projects, mapper, 6, "[]");
+    channels = mock(bo.edu.caseapp.chat.ProjectChatChannelRepository.class);
+    events = mock(org.springframework.context.ApplicationEventPublisher.class);
+    when(channels.defaultVoiceRoom(any())).thenAnswer(call -> java.util.Optional.of(call.getArgument(0, UUID.class)));
+    when(channels.existsByIdAndProject_IdAndChannelTypeAndArchivedAtIsNull(any(), any(), eq("VOICE"))).thenReturn(true);
+    handler = new ProjectVoiceWebSocketHandler(projects, mapper, 6, "[]", channels, events);
+  }
+
+  @Test void observingUsesTheSignalingRosterAndPublishesJoinLeaveMuteAndDisconnect() throws Exception {
+    UUID project = UUID.randomUUID(), room = UUID.randomUUID();
+    var raul = session(project, "raul@test", "Raúl");
+    var carlos = session(project, "carlos@test", "Carlos");
+    connect(raul); connect(carlos);
+    org.junit.jupiter.api.Assertions.assertEquals(0, handler.presence(project, room, "carlos@test").participants().size());
+    send(raul, "{\"type\":\"VOICE_JOIN\",\"roomId\":\"" + room + "\"}");
+    var snapshot = handler.presence(project, room, "carlos@test");
+    org.junit.jupiter.api.Assertions.assertEquals("Raúl", snapshot.participants().getFirst().get("name"));
+    org.junit.jupiter.api.Assertions.assertEquals(6, snapshot.maxParticipants());
+    org.junit.jupiter.api.Assertions.assertEquals(1, handler.presence(project, room, "carlos@test").participants().size());
+    verify(carlos, never()).sendMessage(argThat((TextMessage f) -> f.getPayload().contains("VOICE_JOINED")));
+    send(raul, "{\"type\":\"VOICE_MUTE_STATE\",\"muted\":false}");
+    org.junit.jupiter.api.Assertions.assertEquals(false, handler.presence(project, room, "carlos@test").participants().getFirst().get("muted"));
+    send(carlos, "{\"type\":\"VOICE_JOIN\",\"roomId\":\"" + room + "\"}");
+    org.junit.jupiter.api.Assertions.assertEquals(2, handler.presence(project, room, "carlos@test").participants().size());
+    send(raul, "{\"type\":\"VOICE_LEAVE\"}");
+    handler.afterConnectionClosed(carlos, CloseStatus.NORMAL);
+    org.junit.jupiter.api.Assertions.assertTrue(handler.presence(project, room, "raul@test").participants().isEmpty());
+    var capture = org.mockito.ArgumentCaptor.forClass(VoiceRoomPresenceChanged.class);
+    verify(events, times(5)).publishEvent(capture.capture());
+    org.junit.jupiter.api.Assertions.assertTrue(capture.getValue().revision() > snapshot.revision());
+    org.junit.jupiter.api.Assertions.assertTrue(capture.getValue().participants().isEmpty());
+  }
+
+  @Test void presenceRejectsForeignRoomsAndUsersOutsideTheProject() {
+    UUID project = UUID.randomUUID(), foreign = UUID.randomUUID();
+    when(channels.existsByIdAndProject_IdAndChannelTypeAndArchivedAtIsNull(foreign, project, "VOICE")).thenReturn(false);
+    org.junit.jupiter.api.Assertions.assertThrows(bo.edu.caseapp.error.NotFoundException.class, () -> handler.presence(project, foreign, "member@test"));
+    doThrow(new ForbiddenException("No access")).when(projects).requireAccess(project, "outside@test");
+    org.junit.jupiter.api.Assertions.assertThrows(ForbiddenException.class, () -> handler.presence(project, foreign, "outside@test"));
+    verifyNoInteractions(events);
   }
 
   @Test
