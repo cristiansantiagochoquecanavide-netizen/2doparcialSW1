@@ -27,6 +27,7 @@ public class AcodiWorker {
   @org.springframework.beans.factory.annotation.Autowired private UmlProposalService proposals;
   @org.springframework.beans.factory.annotation.Autowired private AcodiChatActions actions;
   @org.springframework.beans.factory.annotation.Autowired private AcodiDeletionClarification deletions;
+  @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.versioning.VersionComparisonService versionComparisons;
   @Value("${app.ai.max-output-tokens.proposal:1800}") private int proposalTokens=1800;
   @Value("${app.ai.acodi.max-output-tokens:300}") private int maxTokens=300;
   public AcodiWorker(AcodiStore store,AiOrchestrationService orchestration) {this.store=store;this.orchestration=orchestration;}
@@ -35,10 +36,15 @@ public class AcodiWorker {
     var next=store.claim();if(next.isEmpty()) return;var work=next.get();long started=System.nanoTime();LlmResponse response=null;
     try {
       String question=AcodiMention.question(work.content()).replaceFirst("^[,;:\\s]+", "");
+      var comparison=versionComparisons==null?null:versionComparisons.resolve(work.projectId(),work.diagramId(),work.email(),question,work.comparisonVersionIds());
+      if(comparison!=null && comparison.requested() && comparison.clarification()!=null) {
+        store.complete(work,work.name()+", "+comparison.clarification(),LlmResponse.success("",0,0,"local"),(System.nanoTime()-started)/1_000_000);return;
+      }
       java.util.Optional<String> local;
       try {local=actions.handle(work,question);} catch(bo.edu.caseapp.error.BadRequestException invalid){local=java.util.Optional.of(invalid.getMessage()+" No se guardó el cambio. Escribe @ACODI ayuda para consultar los comandos.");}
       if(local.isPresent()){store.complete(work,local.get(),LlmResponse.success("",0,0,"local"),(System.nanoTime()-started)/1_000_000);return;}
       String context=store.prepare(work);
+      if(comparison!=null && comparison.requested()) context += "\nCOMPARACIÓN CU09 VALIDADA:\n" + comparison.context();
       var intent=UmlProposalIntent.classify(question);
       var regeneration=java.util.regex.Pattern.compile("^(?:regenerar|regenera) propuesta ([0-9a-f-]{36})[.!? ]*$").matcher(UmlProposalIntent.normalize(question));
       boolean regenerate=regeneration.matches();if(regenerate)intent=UmlProposalIntent.Intent.PREPARE;
@@ -61,7 +67,8 @@ public class AcodiWorker {
         String answer=proposal.preview().clarification()!=null?"Necesito una aclaración: "+proposal.preview().clarification():"Preparé la propuesta «"+proposal.description()+"». Revisa el cambio verde en el lienzo y utiliza Aprobar o Rechazar. Si hay otra propuesta activa, selecciona esta en la barra del lienzo. Propuesta: "+proposal.id();
         store.complete(work,answer,response,(System.nanoTime()-started)/1_000_000);return;
       }
-      response=orchestration.generatePreparedChannel(work.email(),work.projectId(),work.diagramId(),context,INSTRUCTIONS,List.of(LlmMessage.user(prompt)),maxTokens);
+      String instructions=comparison!=null && comparison.requested()?INSTRUCTIONS+" Explica los cambios, riesgos, errores y recomendaciones a partir de la comparación adjunta. No modifiques ni restaures versiones.":INSTRUCTIONS;
+      response=orchestration.generatePreparedChannel(work.email(),work.projectId(),work.diagramId(),context,instructions,List.of(LlmMessage.user(prompt)),maxTokens);
       long latency=(System.nanoTime()-started)/1_000_000;
       if(!response.success()) {store.fail(work,Integer.valueOf(429).equals(response.httpStatusCode())?"RATE_LIMITED":"PROVIDER_UNAVAILABLE",response,latency);return;}
       store.complete(work,response.content()==null?null:response.content().trim(),response,latency);

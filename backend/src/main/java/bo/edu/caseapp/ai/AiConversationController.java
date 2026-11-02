@@ -3,6 +3,7 @@ package bo.edu.caseapp.ai;
 import bo.edu.caseapp.ai.AiConversationRequests.Create;
 import bo.edu.caseapp.ai.AiConversationRequests.Rename;
 import bo.edu.caseapp.ai.AiConversationRequests.Send;
+import bo.edu.caseapp.ai.AiConversationRequests.ComparisonSelection;
 import bo.edu.caseapp.ai.AiConversationResponses.*;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -75,7 +76,9 @@ public class AiConversationController {
 
   @PostMapping("/{conversationId}/messages/{messageId}/retry")
   public Turn retry(@PathVariable UUID projectId, @PathVariable UUID conversationId,
-      @PathVariable UUID messageId, Authentication auth) {
-    return conversations.retry(projectId, conversationId, messageId, auth.getName());
+      @PathVariable UUID messageId, Authentication auth,
+      @Valid @RequestBody(required = false) ComparisonSelection selection) {
+    return conversations.retry(projectId, conversationId, messageId, auth.getName(),
+        selection == null ? null : selection.comparisonVersionIds());
   }
 }

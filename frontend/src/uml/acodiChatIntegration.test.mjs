@@ -41,3 +41,16 @@ test('conversation drafts and displayed messages are scoped to the selected auth
   assert.match(code, /historyId === activeId/); assert.match(code, /const messages = conversationReady \? messageHistory : \[\]/)
   assert.match(code, /value=\{conversationReady \? input : ''\}/)
 })
+
+test('CU09 comparison selection is scoped to the canvas session and accompanies group and private chat requests', async () => {
+  const canvas = await readFile(new URL('./UmlCanvas.tsx', import.meta.url), 'utf8')
+  const team = await readFile(new URL('./LiveTeamChatPanel.tsx', import.meta.url), 'utf8')
+  const privateChat = await readFile(new URL('./AiConversationsPanel.tsx', import.meta.url), 'utf8')
+  assert.match(canvas, /setComparisonVersionIds\(\[beforeVersion\.id, afterVersion\.id\]\)/)
+  assert.match(canvas, /setComparisonVersionIds\(\[\]\).*\[project\.id, diagram\?\.id, auth\.token\]/s)
+  assert.match(team, /comparisonVersionIds: comparisonVersionIds\.slice\(0, 2\)/)
+  assert.match(privateChat, /comparisonVersionIds: comparisonVersionIds\.slice\(0, 2\)/)
+  assert.match(privateChat, /messages\/\$\{message\.id\}\/retry[^\n]+comparisonVersionIds/)
+  assert.equal((team.match(/className=\{'team-subtab-btn /g) || []).length, 2)
+  assert.doesNotMatch(canvas, /Analizar con ACODI|selectedVersionStorage|localStorage.*comparison/i)
+})

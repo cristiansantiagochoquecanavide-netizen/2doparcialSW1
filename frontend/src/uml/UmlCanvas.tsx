@@ -416,10 +416,12 @@ type Props = {
 
 export function UmlCanvas({ project, auth, onError, members = [], onManageMembers, onBack }: Props) {
   const [historicalView, setHistoricalView] = useState<{ snapshot: DiagramFullView; version: VersionSummary; changes?: VersionChange[]; before?: DiagramFullView; beforeVersion?: VersionSummary } | null>(null)
+  const [comparisonVersionIds, setComparisonVersionIds] = useState<string[]>([])
   const [historicalNodeMeasurements, setHistoricalNodeMeasurements] = useState<Record<string, { width?: number; height?: number }>>({})
   const isReadOnly = project.role === 'LECTOR' || historicalView !== null
 
   const [diagram, setDiagram] = useState<DiagramSummary | null>(null)
+  useEffect(() => { setComparisonVersionIds([]) }, [project.id, diagram?.id, auth.token])
   const [elementsRaw, setElementsRaw] = useState<ElementDetail[]>([])
   const [relationsRaw, setRelationsRaw] = useState<RelationDetail[]>([])
   const [loadedBaseDiagramId, setLoadedBaseDiagramId] = useState('')
@@ -2024,6 +2026,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     <>
     <WorkspaceChrome
       projectId={project.id} token={auth.token}
+      comparisonVersionIds={comparisonVersionIds}
       projectName={project.name} role={project.role} diagram={diagram} elements={elementsRaw} relations={relationsRaw}
       selectedElement={selectedElement} selectedRelation={selectedRelation} members={members} savingStatus={savingStatus}
       currentUser={{ name: auth.name, email: auth.email, role: project.role }}
@@ -2432,6 +2435,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           onClose={() => setShowVersions(false)}
           onView={(snapshot, version) => { setHistoricalNodeMeasurements({}); setHistoricalView({ snapshot, version }); setShowVersions(false) }}
           onCompare={(before, beforeVersion, after, afterVersion) => {
+            setComparisonVersionIds([beforeVersion.id, afterVersion.id])
             setHistoricalNodeMeasurements({})
             setHistoricalView({ snapshot: after, version: afterVersion, before, beforeVersion, changes: compareVersions(before, after) })
             setShowVersions(false)

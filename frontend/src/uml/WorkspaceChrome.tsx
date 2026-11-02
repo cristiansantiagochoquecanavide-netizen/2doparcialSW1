@@ -35,6 +35,7 @@ type Props = {
   projectName: string; role: string; diagram: DiagramSummary | null; elements: ElementDetail[]; relations: RelationDetail[]
   selectedElement: ElementDetail | null; selectedRelation: RelationDetail | null; members: { id: string; userId: string; name: string; email: string; role: string }[]
   currentUser: { name: string; email: string; role: string }
+  comparisonVersionIds: string[]
   savingStatus: string; online: boolean; syncing: boolean; wsConnected: boolean; queueCount: number; readOnly: boolean
   onBack?: () => void; onManageMembers?: () => void; onCreate: (type: TipoElementoUML) => void
   onImageUpload: (file: File) => void
@@ -370,6 +371,7 @@ function WorkspaceChromeContent(p: Props) {
                     token={p.token}
                     members={p.members}
                     currentUser={p.currentUser}
+                    comparisonVersionIds={p.comparisonVersionIds}
                     isWide={isWideTeam}
                     visible={rightPanelMode === 'team' && !isRightPanelCollapsed}
                     onToggleWide={() => setIsWideTeam(!isWideTeam)}

@@ -14,6 +14,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class AiConversationServiceTest {
   private AiConversationStore store;
@@ -77,6 +78,60 @@ class AiConversationServiceTest {
 
     assertFalse(result.created());
     verify(orchestration, never()).generate(anyString(), any(), any(), any(), anyString(), anyList(), any(), any());
+  }
+
+  @Test void selectedVersionContextIsValidatedAndAddedOnlyToRequestedPrivateOrGroupChatTurn() {
+    var comparison = mock(bo.edu.caseapp.versioning.VersionComparisonService.class);
+    ReflectionTestUtils.setField(service, "versionComparisons", comparison);
+    List<UUID> selected = List.of(UUID.randomUUID(), UUID.randomUUID());
+    when(comparison.resolve(projectId, null, "carmen@example.com", question.content(), selected))
+        .thenReturn(new bo.edu.caseapp.versioning.VersionComparisonService.Result(true, null, "Comparación CU09: Venta modificada; Pago agregada."));
+    when(orchestration.generate(anyString(), eq(projectId), isNull(), eq(AiOperation.AI_CONVERSATION_GROUP),
+        anyString(), anyList(), eq(400), eq(0.3))).thenReturn(success("Carmen, se agregó Pago."));
+    when(store.completeQuestion(eq(projectId), eq(conversationId), eq(questionId), eq("carmen@example.com"),
+        anyString(), eq(5), eq(8), anyLong())).thenReturn(new Turn(question, question, true));
+
+    service.send(projectId, conversationId, "carmen@example.com", new AiConversationRequests.Send(UUID.randomUUID(), question.content(), selected));
+
+    verify(comparison).resolve(projectId, null, "carmen@example.com", question.content(), selected);
+    ArgumentCaptor<String> instructions = ArgumentCaptor.forClass(String.class);
+    verify(orchestration).generate(eq("carmen@example.com"), eq(projectId), isNull(),
+        eq(AiOperation.AI_CONVERSATION_GROUP), instructions.capture(), anyList(), eq(400), eq(0.3));
+    assertTrue(instructions.getValue().contains("Comparación CU09: Venta modificada; Pago agregada."));
+  }
+
+  @Test void comparisonWithoutSelectedOrExplicitVersionsAsksInChatWithoutCallingModel() {
+    var comparison = mock(bo.edu.caseapp.versioning.VersionComparisonService.class);
+    ReflectionTestUtils.setField(service, "versionComparisons", comparison);
+    when(comparison.resolve(projectId, null, "carmen@example.com", question.content(), null))
+        .thenReturn(new bo.edu.caseapp.versioning.VersionComparisonService.Result(true,
+            "Selecciona dos versiones en el comparador CU09.", null));
+    when(store.completeQuestion(eq(projectId), eq(conversationId), eq(questionId), eq("carmen@example.com"),
+        contains("Selecciona dos versiones"), eq(0), eq(0), eq(0L))).thenReturn(new Turn(question, question, true));
+
+    service.send(projectId, conversationId, "carmen@example.com", new AiConversationRequests.Send(UUID.randomUUID(), question.content()));
+
+    verify(store).completeQuestion(eq(projectId), eq(conversationId), eq(questionId), eq("carmen@example.com"),
+        contains("Selecciona dos versiones"), eq(0), eq(0), eq(0L));
+    verifyNoInteractions(orchestration);
+  }
+
+  @Test void privateRetryReceivesTheCurrentSessionSelectionAgain() {
+    var comparison = mock(bo.edu.caseapp.versioning.VersionComparisonService.class);
+    ReflectionTestUtils.setField(service, "versionComparisons", comparison);
+    List<UUID> selected = List.of(UUID.randomUUID(), UUID.randomUUID());
+    when(store.retryQuestion(projectId, conversationId, questionId, "carmen@example.com"))
+        .thenReturn(new AiConversationStore.QuestionReceipt(conversation, question, true));
+    when(comparison.resolve(projectId, null, "carmen@example.com", question.content(), selected))
+        .thenReturn(new bo.edu.caseapp.versioning.VersionComparisonService.Result(true, null, "CU09 v1 a v2"));
+    when(orchestration.generate(anyString(), eq(projectId), isNull(), eq(AiOperation.AI_CONVERSATION_GROUP),
+        anyString(), anyList(), eq(400), eq(0.3))).thenReturn(success("Carmen, comparación lista."));
+    when(store.completeQuestion(eq(projectId), eq(conversationId), eq(questionId), eq("carmen@example.com"),
+        anyString(), eq(5), eq(8), anyLong())).thenReturn(new Turn(question, question, true));
+
+    service.retry(projectId, conversationId, questionId, "carmen@example.com", selected);
+
+    verify(comparison).resolve(projectId, null, "carmen@example.com", question.content(), selected);
   }
 
   private LlmResponse success(String content) { return LlmResponse.success(content, 5, 8, "qwen/qwen3.8-27b"); }

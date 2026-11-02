@@ -22,6 +22,7 @@ public class AiConversationService {
   @org.springframework.beans.factory.annotation.Autowired private UmlProposalStore proposalStore;
   @org.springframework.beans.factory.annotation.Autowired private AiMemoryService sharedMemory;
   @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.chat.AcodiDeletionClarification deletions;
+  @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.versioning.VersionComparisonService versionComparisons;
 
   public AiConversationService(AiConversationStore store, AiOrchestrationService orchestration,
       @Value("${app.ai.max-output-tokens.conversation:300}") int maxOutputTokens) {
@@ -43,19 +44,31 @@ public class AiConversationService {
   public Turn send(UUID projectId, UUID conversationId, String email, Send request) {
     AiConversationStore.QuestionReceipt receipt = store.addQuestion(projectId, conversationId, email, request);
     if (!receipt.created()) return store.turn(projectId, conversationId, receipt.question().id(), email);
-    return answer(projectId, email, receipt.conversation(), receipt.question());
+    return answer(projectId, email, receipt.conversation(), receipt.question(), request.comparisonVersionIds());
   }
 
   public Turn retry(UUID projectId, UUID conversationId, UUID questionId, String email) {
-    AiConversationStore.QuestionReceipt receipt = store.retryQuestion(projectId, conversationId, questionId, email);
-    return answer(projectId, email, receipt.conversation(), receipt.question());
+    return retry(projectId, conversationId, questionId, email, null);
   }
 
-  private Turn answer(UUID projectId, String email, Conversation conversation, Message question) {
+  public Turn retry(UUID projectId, UUID conversationId, UUID questionId, String email, List<UUID> selectedVersionIds) {
+    AiConversationStore.QuestionReceipt receipt = store.retryQuestion(projectId, conversationId, questionId, email);
+    return answer(projectId, email, receipt.conversation(), receipt.question(), selectedVersionIds);
+  }
+
+  private Turn answer(UUID projectId, String email, Conversation conversation, Message question, List<UUID> selectedVersionIds) {
     long startedAt = System.nanoTime();
     try {
       String instruction=bo.edu.caseapp.chat.AcodiMention.question(question.content());
       String local=UmlProposalIntent.normalize(instruction);
+      String comparisonContext = null;
+      if (versionComparisons != null) {
+        var comparison = versionComparisons.resolve(projectId, conversation.diagramId(), email, instruction, selectedVersionIds);
+        if (comparison.requested() && comparison.clarification() != null)
+          return store.completeQuestion(projectId, conversation.id(), question.id(), email,
+              question.senderName()+", "+comparison.clarification(), 0, 0, 0L);
+        if (comparison.requested()) comparisonContext = comparison.context();
+      }
       if(local.matches("(?:ver |mostrar )?(contexto|memoria)(?: del proyecto)?[.!? ]*")) {
         var view=sharedMemory.get(projectId,conversation.diagramId(),email);var m=view.projectMemory();
         String text=question.senderName()+", contexto compartido confirmado:\nNombre: "+m.systemName()+"\nDescripción: "+m.systemDescription()+"\nDominio: "+m.businessDomain()+"\nObjetivos: "+m.objectives()+"\nInformación adicional: "+m.additionalContext();
@@ -110,6 +123,7 @@ public class AiConversationService {
           + "Si aún no hay propósito confirmado, invítale a describirlo sin bloquear el modelado. "
           + "Con cero, una o dos clases, evita conclusiones firmes; con dos o tres, formula cualquier lectura del dominio como hipótesis y pide confirmación. "
           + "No modifiques ni afirmes haber modificado el diagrama; presenta las acciones como sugerencias.";
+      if (comparisonContext != null) system += " Analiza los cambios, riesgos, errores y recomendaciones basándote en esta comparación determinista autorizada. No modifiques ni restaures versiones.\n" + comparisonContext;
       LlmResponse response = orchestration.generate(email, projectId, conversation.diagramId(), operation,
           system, messages, maxOutputTokens, 0.3);
       long latency = (System.nanoTime() - startedAt) / 1_000_000;

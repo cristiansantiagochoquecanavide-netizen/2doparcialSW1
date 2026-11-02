@@ -11,7 +11,7 @@ type Conversation = { id: string; scope: Scope; title: string; diagramId: string
 type Message = { id: string; clientMessageId: string | null; senderType: 'USER' | 'AGENT'; senderName: string; recipientName: string | null; content: string; status: 'PENDING' | 'COMPLETED' | 'ERROR'; errorCode: string | null; createdAt: string; replyToMessageId: string | null }
 type Page = { messages: Message[]; nextCursor: string | null; hasMore: boolean }
 type Memory = { projectMemory: { systemName: string | null; systemDescription: string | null; businessDomain: string | null; objectives: string | null; additionalContext: string | null } | null; entries: { id: string; entryType: string; confidenceScope: string; content: string; diagramId: string | null }[] }
-type Props = { projectId: string; diagramId: string | null; token: string; currentUser: { name: string; email: string; role: string }; active?: boolean; chatOnly?: boolean; navigationHidden?: boolean; selectedConversationId?: string; selectedConversationTitle?: string }
+type Props = { projectId: string; diagramId: string | null; token: string; currentUser: { name: string; email: string; role: string }; comparisonVersionIds: string[]; active?: boolean; chatOnly?: boolean; navigationHidden?: boolean; selectedConversationId?: string; selectedConversationTitle?: string }
 const apiBase = import.meta.env.VITE_API_BASE_URL || ''
 const entryLabels: Record<string,string> = { SYSTEM_CONTEXT: 'Contexto del sistema', BUSINESS_RULE: 'Regla de negocio', FUNCTIONAL_CONSTRAINT: 'Restricción funcional', ARCHITECTURE_DECISION: 'Decisión arquitectónica', MODELING_CONVENTION: 'Convención de modelado', ADDITIONAL: 'Información adicional' }
 
@@ -28,7 +28,7 @@ async function api<T>(path: string, token: string, init: RequestInit = {}): Prom
   return response.json() as Promise<T>
 }
 
-export function AiConversationsPanel({ projectId, diagramId, token, currentUser, active = true, chatOnly = false, navigationHidden = false, selectedConversationId, selectedConversationTitle }: Props) {
+export function AiConversationsPanel({ projectId, diagramId, token, currentUser, comparisonVersionIds, active = true, chatOnly = false, navigationHidden = false, selectedConversationId, selectedConversationTitle }: Props) {
   const speech = useAgentSpeech()
   const base = `/api/projects/${projectId}/ai`
   const [scope, setScope] = useState<Scope>('GROUP')
@@ -120,7 +120,7 @@ export function AiConversationsPanel({ projectId, diagramId, token, currentUser,
     const optimistic: Message = { id: clientMessageId, clientMessageId, senderType: 'USER', senderName: currentUser.name, recipientName: null, content, status: 'PENDING', errorCode: null, createdAt: new Date().toISOString(), replyToMessageId: null }
     setMessages((old) => [...old, optimistic])
     try {
-      const turn = await api<{ question: Message; answer: Message | null; proposalId?: string | null }>(`${base}/conversations/${activeId}/messages`, token, { method: 'POST', body: JSON.stringify({ clientMessageId, content }) })
+      const turn = await api<{ question: Message; answer: Message | null; proposalId?: string | null }>(`${base}/conversations/${activeId}/messages`, token, { method: 'POST', body: JSON.stringify({ clientMessageId, content, comparisonVersionIds: comparisonVersionIds.slice(0, 2) }) })
       if (activeKey.current !== projectId + ':' + activeId) return
       if (turn.answer) speechSources.current.set(turn.answer.id, { projectId, conversationId: activeId, scope })
       if (turn.proposalId && scope === 'PRIVATE') window.dispatchEvent(new CustomEvent('case:canvas-private-proposal', { detail: { projectId, diagramId, proposalId: turn.proposalId } }))
@@ -128,7 +128,7 @@ export function AiConversationsPanel({ projectId, diagramId, token, currentUser,
     } catch (e) { if (activeKey.current !== projectId + ':' + activeId) return; setMessages((old) => old.map((item) => item.id === clientMessageId ? { ...item, status: 'ERROR', errorCode: 'REQUEST_FAILED' } : item)); setError(e instanceof Error ? e.message : 'No se pudo consultar al agente.') }
     finally { setBusy(false) }
   }
-  async function retry(message: Message) { setBusy(true); setError(''); try { const turn = await api<{ question: Message; answer: Message | null }>(`${base}/conversations/${activeId}/messages/${message.id}/retry`, token, { method: 'POST' }); if (activeKey.current !== projectId + ':' + activeId) return; if (turn.answer) speechSources.current.set(turn.answer.id, { projectId, conversationId: activeId, scope }); setMessages((old) => [...old.filter((item) => item.id !== turn.question.id && (!turn.answer || item.id !== turn.answer.id)), turn.question, ...(turn.answer ? [turn.answer] : [])]) } catch (e) { setError(e instanceof Error ? e.message : 'No se pudo reintentar.') } finally { setBusy(false) } }
+  async function retry(message: Message) { setBusy(true); setError(''); try { const turn = await api<{ question: Message; answer: Message | null }>(`${base}/conversations/${activeId}/messages/${message.id}/retry`, token, { method: 'POST', body: JSON.stringify({ comparisonVersionIds: comparisonVersionIds.slice(0, 2) }) }); if (activeKey.current !== projectId + ':' + activeId) return; if (turn.answer) speechSources.current.set(turn.answer.id, { projectId, conversationId: activeId, scope }); setMessages((old) => [...old.filter((item) => item.id !== turn.question.id && (!turn.answer || item.id !== turn.answer.id)), turn.question, ...(turn.answer ? [turn.answer] : [])]) } catch (e) { setError(e instanceof Error ? e.message : 'No se pudo reintentar.') } finally { setBusy(false) } }
   async function rename(item: Conversation) { const title = window.prompt('Nombre de la conversación', item.title)?.trim(); if (!title || title === item.title) return; try { await api(`${base}/conversations/${item.id}`, token, { method: 'PATCH', body: JSON.stringify({ title }) }); await loadList(item.id) } catch (e) { setError(e instanceof Error ? e.message : 'No se pudo renombrar.') } }
   async function archive(item: Conversation) { if (!window.confirm(`¿Archivar “${item.title}”?`)) return; try { await api(`${base}/conversations/${item.id}/archive`, token, { method: 'POST' }); await loadList() } catch (e) { setError(e instanceof Error ? e.message : 'No se pudo archivar.') } }
   async function loadMemory() { const result = await api<Memory>(`${base}/memory${diagramId ? `?diagramId=${diagramId}` : ''}`, token); setMemory(result); setDraft({ systemName: result.projectMemory?.systemName || '', systemDescription: result.projectMemory?.systemDescription || '', businessDomain: result.projectMemory?.businessDomain || '', objectives: result.projectMemory?.objectives || '', additionalContext: result.projectMemory?.additionalContext || '' }) }

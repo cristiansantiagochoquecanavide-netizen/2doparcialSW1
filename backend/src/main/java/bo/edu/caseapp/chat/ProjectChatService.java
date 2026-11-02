@@ -121,7 +121,7 @@ public class ProjectChatService {
 
     ProjectChatMessage saved = messages.findById(insertedId)
         .orElseThrow(() -> new IllegalStateException("El mensaje guardado no pudo recuperarse."));
-    if(mention && acodi!=null) acodi.enqueue(projectId,channelId,insertedId,diagramId);
+    if(mention && acodi!=null) acodi.enqueue(projectId,channelId,insertedId,diagramId,request.comparisonVersionIds());
     Message result = response(saved);
     events.publishEvent(new ChatMessageCommittedEvent(projectId, result));
     return new SendMessageResult(result, true);

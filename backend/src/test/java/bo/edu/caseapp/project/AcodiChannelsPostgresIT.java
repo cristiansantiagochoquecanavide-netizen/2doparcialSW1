@@ -35,11 +35,14 @@ import org.springframework.transaction.support.TransactionTemplate;
     "logging.level.root=WARN","spring.jpa.show-sql=false","debug=false","spring.main.banner-mode=off"})
 class AcodiChannelsPostgresIT {
   @DynamicPropertySource static void db(DynamicPropertyRegistry r) {
-    r.add("spring.datasource.url",()->"jdbc:postgresql://localhost:55439/case_block14_test");r.add("spring.datasource.username",()->"case_block14");r.add("spring.datasource.password",()->"case_block14_test_only");
+    r.add("spring.datasource.url",()->System.getenv().getOrDefault("CU23_TEST_JDBC_URL","jdbc:postgresql://localhost:55439/case_block14_test"));
+    r.add("spring.datasource.username",()->System.getenv().getOrDefault("CU23_TEST_JDBC_USER","case_block14"));
+    r.add("spring.datasource.password",()->System.getenv().getOrDefault("CU23_TEST_JDBC_PASSWORD","case_block14_test_only"));
   }
   @Autowired JdbcTemplate jdbc;@Autowired ObjectMapper mapper;@Autowired ProjectChatService chat;
   @Autowired AcodiStore store;@Autowired AcodiWorker worker;@Autowired AcodiQueue queue;
-  @Autowired AiAnalysisStore analysis;@Autowired AiConversationStore conversations;
+  @Autowired AiAnalysisStore analysis;@Autowired AiConversationStore conversations;@Autowired AiConversationService conversationService;
+  @Autowired bo.edu.caseapp.versioning.VersionService versionService;
   @Autowired ProjectRepository projects;@Autowired ProjectMemberRepository members;@Autowired UserRepository users;
   @Autowired DiagramaClaseRepository diagrams;@Autowired UmlService uml;@Autowired JwtService jwt;
   @Autowired TestRestTemplate rest;@Autowired PlatformTransactionManager transactions;
@@ -58,7 +61,17 @@ class AcodiChannelsPostgresIT {
   ChatResponses.Message send(String content,User actor) {return chat.send(project.getId(),general,actor.getEmail(),new ChatRequests.SendMessage(UUID.randomUUID(),content,null,diagram)).message();}
   ChatResponses.Message question(){return send("@ACODI revisa las relaciones de Venta",owner);}
   ChatResponses.Message current(UUID id){return chat.history(project.getId(),general,owner.getEmail(),null,100).messages().stream().filter(m->m.id().equals(id)).findFirst().orElseThrow();}
-  long count(String table){if(!Set.of("project_chat_message","acodi_channel_job","ai_analysis_run","elemento_uml").contains(table))throw new IllegalArgumentException();return jdbc.queryForObject("SELECT count(*) FROM "+table,Long.class);}
+  List<UUID> comparisonPair(){
+    versionService.createVersion(project.getId(),diagram,owner.getEmail(),new bo.edu.caseapp.versioning.VersionRequests.CreateVersion("Antes de Pago"));
+    long revision=uml.getDiagramRevision(diagram);
+    uml.createElement(project.getId(),diagram,owner.getEmail(),new UmlRequests.SaveElement(null,TipoElementoUML.CLASE,"Pago",300.0,200.0,"{}",revision));
+    versionService.createVersion(project.getId(),diagram,owner.getEmail(),new bo.edu.caseapp.versioning.VersionRequests.CreateVersion("Con Pago"));
+    var all=versionService.listVersions(project.getId(),diagram,owner.getEmail());
+    UUID first=all.stream().filter(v->v.numeroVersion()==1).findFirst().orElseThrow().id();
+    UUID third=all.stream().filter(v->v.numeroVersion()==3).findFirst().orElseThrow().id();
+    return List.of(first,third);
+  }
+  long count(String table){if(!Set.of("project_chat_message","acodi_channel_job","ai_analysis_run","elemento_uml","version_diagrama").contains(table))throw new IllegalArgumentException();return jdbc.queryForObject("SELECT count(*) FROM "+table,Long.class);}
   @Test void ordinaryHumanMessagesNeverCreateJobsOrCallGroq(){send("Carlos revisa esta relación; ACODI podría ayudar",owner);worker.runOnce();assertEquals(0,count("acodi_channel_job"));verifyNoInteractions(provider);}
   @Test void mentionPersistsHumanAndAgentInSameChannelWithActualNameAndNoUmlMutation(){
     var q=question();assertEquals("PENDIENTE",q.acodi().status());verifyNoInteractions(provider);worker.runOnce();
@@ -80,6 +93,31 @@ class AcodiChannelsPostgresIT {
     var privateChat=conversations.create(project.getId(),editor.getEmail(),new AiConversationRequests.Create(AiConversationScope.PRIVATE,diagram,"Privado"));conversations.addQuestion(project.getId(),privateChat.id(),editor.getEmail(),new AiConversationRequests.Send(UUID.randomUUID(),"NO_COMPARTIR_PRIVADO"));
     question();worker.runOnce();var captor=org.mockito.ArgumentCaptor.forClass(List.class);verify(provider).chat(captor.capture(),anyInt(),any());String prompt=captor.getValue().toString();
     assertTrue(prompt.contains("Venta"));assertTrue(prompt.contains("BigDecimal"));assertTrue(prompt.contains("Ana"));assertFalse(prompt.contains("NO_COMPARTIR_PRIVADO"));assertFalse(prompt.contains("999.0"));assertFalse(prompt.contains("888.0"));assertFalse(prompt.contains("GROQ_API_KEY"));
+  }
+  @Test void groupChannelComparesSelectedSnapshotsThroughGroqWithoutCreatingVersions() {
+    var pair=comparisonPair();long before=count("version_diagrama");
+    var request=new ChatRequests.SendMessage(UUID.randomUUID(),"@ACODI compara las versiones seleccionadas",null,diagram,pair);
+    var question=chat.send(project.getId(),general,owner.getEmail(),request).message();
+    assertEquals(List.of(pair.get(0),pair.get(1)),jdbc.query("SELECT comparison_before_version_id,comparison_after_version_id FROM acodi_channel_job WHERE message_id=?",(rs,row)->List.of(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class)),question.id()).getFirst());
+    worker.runOnce();var done=current(question.id());assertEquals("COMPLETADO",done.acodi().status());
+    var sent=org.mockito.ArgumentCaptor.forClass(List.class);verify(provider).chat(sent.capture(),anyInt(),any());
+    String prompt=sent.getValue().toString();assertTrue(prompt.contains("COMPARACIÓN CU09 VALIDADA"));assertTrue(prompt.contains("CLASE Pago: agregada"));
+    assertEquals(before,count("version_diagrama"));
+  }
+  @Test void groupChannelWithoutPairOrExplicitNumbersClarifiesLocallyWithoutGroq() {
+    var question=chat.send(project.getId(),general,owner.getEmail(),new ChatRequests.SendMessage(UUID.randomUUID(),"@ACODI compara las versiones seleccionadas",null,diagram)).message();
+    worker.runOnce();var done=current(question.id());var answer=current(done.acodi().responseMessageId());
+    assertEquals("COMPLETADO",done.acodi().status());assertTrue(answer.content().contains("Selecciona dos versiones"));verifyNoInteractions(provider);
+  }
+  @Test void privateConversationUsesSelectedVersionsWithoutPublishingItsQuestionOrAnswerToGroup() throws Exception {
+    var pair=comparisonPair();long before=count("version_diagrama");Inbox group=connect(owner,project.getId());
+    var privateChat=conversations.create(project.getId(),editor.getEmail(),new AiConversationRequests.Create(AiConversationScope.PRIVATE,diagram,"Notas privadas"));
+    var turn=conversationService.send(project.getId(),privateChat.id(),editor.getEmail(),new AiConversationRequests.Send(UUID.randomUUID(),"Compara las versiones seleccionadas",pair));
+    assertNotNull(turn.answer());assertEquals(AiConversationMessageStatus.COMPLETED,turn.answer().status());
+    var sent=org.mockito.ArgumentCaptor.forClass(List.class);verify(provider).chat(sent.capture(),anyInt(),any());
+    assertTrue(sent.getValue().toString().contains("Comparación CU09 determinista entre v1 y v3"));
+    assertThrows(NotFoundException.class,()->conversations.get(project.getId(),privateChat.id(),owner.getEmail()));
+    assertNull(group.messages.poll(250,TimeUnit.MILLISECONDS));assertEquals(before,count("version_diagrama"));
   }
   @Test void outsidersForeignDiagramsAndForeignChannelsAreRejected(){
     assertThrows(ForbiddenException.class,()->send("@ACODI revisa",outsider));

@@ -21,6 +21,7 @@ type PageState = { nextCursor: string | null; hasMore: boolean; loaded: boolean;
 type Outgoing = { clientMessageId: string; content: string; channelId: string; diagramId: string | null }
 interface Props {
   projectId: string; diagramId: string | null; projectName: string; diagramName: string; token: string; members: TeamMember[]
+  comparisonVersionIds: string[]
   currentUser: { name: string; email: string; role: string }; isWide: boolean; visible?: boolean
   onToggleWide: () => void; onClose: () => void; onSwitchToInspector: () => void
 }
@@ -53,6 +54,7 @@ function messageTime(value: string) {
 
 export function LiveTeamChatPanel({
   projectId, diagramId, projectName, diagramName, token, members, currentUser, isWide, visible = true,
+  comparisonVersionIds,
   onToggleWide, onClose, onSwitchToInspector
 }: Props) {
   const speech = useAgentSpeech()
@@ -311,7 +313,7 @@ export function LiveTeamChatPanel({
     try {
       const message = await request<ChatMessage>(
         '/api/projects/' + projectId + '/chat/channels/' + outgoing.channelId + '/messages',
-        token, { method: 'POST', body: JSON.stringify(outgoing) }
+        token, { method: 'POST', body: JSON.stringify({ ...outgoing, comparisonVersionIds: comparisonVersionIds.slice(0, 2) }) }
       )
       setMessages((old) => ({ ...old, [message.channelId]: mergeMessages(old[message.channelId] || [], [message]) }))
       setPages((old) => ({ ...old, [message.channelId]: { ...old[message.channelId], loaded: true } }))
@@ -374,7 +376,7 @@ export function LiveTeamChatPanel({
             {selectedVoice && <VoiceRoom key={projectId + ':' + token + ':' + selectedVoice} projectId={projectId} roomId={selectedVoice} roomName={voiceRooms.find(room => room.id === selectedVoice)?.name || 'Sala de voz'} token={token} currentUserName={currentUser.name} onBackToChat={() => setView('text')} />}
           </section>
           <section className="team-chat-area" hidden={view !== 'ai'}>
-            <AiConversationsPanel key={projectId + ':' + token} projectId={projectId} diagramId={diagramId} token={token} currentUser={currentUser} active={visible && activeTab === 'chat' && view === 'ai'} chatOnly navigationHidden selectedConversationId={selectedConversation} selectedConversationTitle={privateChats.find(chat => chat.id === selectedConversation)?.title} />
+            <AiConversationsPanel key={projectId + ':' + token} projectId={projectId} diagramId={diagramId} token={token} currentUser={currentUser} comparisonVersionIds={comparisonVersionIds} active={visible && activeTab === 'chat' && view === 'ai'} chatOnly navigationHidden selectedConversationId={selectedConversation} selectedConversationTitle={privateChats.find(chat => chat.id === selectedConversation)?.title} />
           </section>
           <section className="team-chat-area" hidden={view !== 'text'}>
             <div className="team-chat-header"><div className="team-chat-header-info"><HashIcon size={14} className="channel-icon-header" /><strong>{activeChannel?.name || 'Canales del proyecto'}</strong></div><span className="team-chat-header-desc">{activeChannel?.description || 'Mensajes visibles para miembros autorizados.'}</span></div>

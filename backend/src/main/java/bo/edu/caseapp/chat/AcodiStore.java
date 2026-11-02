@@ -31,7 +31,10 @@ public class AcodiStore {
     if(ids.isEmpty()) return Optional.empty();UUID messageId=ids.getFirst(),token=UUID.randomUUID();
     jdbc.update("UPDATE acodi_channel_job SET status='PROCESANDO',run_token=?,attempts=attempts+1,lease_until=now()+(?*interval '1 second'),updated_at=now() WHERE message_id=?",token,Math.max(120,timeout+60),messageId);
     var row=jdbc.queryForMap("SELECT j.*,m.content,u.email,u.name FROM acodi_channel_job j JOIN project_chat_message m ON m.id=j.message_id JOIN user_account u ON u.id=m.sender_user_id WHERE j.message_id=?",messageId);
-    var work=new Work(messageId,(UUID)row.get("project_id"),(UUID)row.get("channel_id"),(UUID)row.get("diagram_id"),token,(String)row.get("email"),(String)row.get("name"),(String)row.get("content"));
+    var comparisonIds=new ArrayList<UUID>();
+    if(row.get("comparison_before_version_id")!=null)comparisonIds.add((UUID)row.get("comparison_before_version_id"));
+    if(row.get("comparison_after_version_id")!=null)comparisonIds.add((UUID)row.get("comparison_after_version_id"));
+    var work=new Work(messageId,(UUID)row.get("project_id"),(UUID)row.get("channel_id"),(UUID)row.get("diagram_id"),token,(String)row.get("email"),(String)row.get("name"),(String)row.get("content"),List.copyOf(comparisonIds));
     chat.publishUpdated(work.projectId(),messageId);return Optional.of(work);
   }
   public String prepare(Work work) {
@@ -82,6 +85,6 @@ public class AcodiStore {
     var valid=jdbc.queryForList("SELECT message_id FROM acodi_channel_job WHERE message_id=? AND run_token=? AND status='PROCESANDO' AND lease_until>now() FOR UPDATE",work.messageId(),work.token());
     if(valid.isEmpty()) throw new ConflictException("La solicitud ACODI ya no está activa.");
   }
-  public record Work(UUID messageId,UUID projectId,UUID channelId,UUID diagramId,UUID token,String email,String name,String content) { }
+  public record Work(UUID messageId,UUID projectId,UUID channelId,UUID diagramId,UUID token,String email,String name,String content,List<UUID> comparisonVersionIds) { }
   public record Retry(@jakarta.validation.constraints.NotNull UUID clientRequestId,UUID diagramId) { }
 }

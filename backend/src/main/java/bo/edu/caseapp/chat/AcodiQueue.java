@@ -20,7 +20,12 @@ public class AcodiQueue {
     return ids.size()==1?ids.getFirst():null;
   }
   public void enqueue(UUID projectId,UUID channelId,UUID messageId,UUID diagramId) {
-    jdbc.update("INSERT INTO acodi_channel_job(message_id,project_id,channel_id,diagram_id) VALUES (?,?,?,?)",messageId,projectId,channelId,diagramId);
+    enqueue(projectId,channelId,messageId,diagramId,null);
+  }
+  public void enqueue(UUID projectId,UUID channelId,UUID messageId,UUID diagramId,List<UUID> comparisonVersionIds) {
+    UUID before=comparisonVersionIds!=null && comparisonVersionIds.size()==2?comparisonVersionIds.get(0):null;
+    UUID after=comparisonVersionIds!=null && comparisonVersionIds.size()==2?comparisonVersionIds.get(1):null;
+    jdbc.update("INSERT INTO acodi_channel_job(message_id,project_id,channel_id,diagram_id,comparison_before_version_id,comparison_after_version_id) VALUES (?,?,?,?,?,?)",messageId,projectId,channelId,diagramId,before,after);
   }
   @Transactional(readOnly=true)
   public ChatResponses.Invocation view(UUID messageId) {
