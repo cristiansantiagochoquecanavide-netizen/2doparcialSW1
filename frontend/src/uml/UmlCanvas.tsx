@@ -8,6 +8,7 @@ import {
   useEdgesState,
   Connection,
   Edge,
+  NodeChange,
   BackgroundVariant,
   MarkerType,
   SelectionMode,
@@ -40,7 +41,8 @@ import { ValidationModal } from './ValidationModal'
 import { RelationalModal } from './RelationalModal'
 import { CodeGeneratorModal } from './CodeGeneratorModal'
 import { AiAssistantModal } from './AiAssistantModal'
-import { VersionsModal } from './VersionsModal'
+import { VersionHistoryModal, type VersionSummary } from './VersionHistoryModal'
+import { compareVersions, type VersionChange } from './versionDiff.mjs'
 import { XmiModal } from './XmiModal'
 import { ApiTesterModal } from './ApiTesterModal'
 import { WorkspaceChrome } from './WorkspaceChrome'
@@ -413,7 +415,9 @@ type Props = {
 }
 
 export function UmlCanvas({ project, auth, onError, members = [], onManageMembers, onBack }: Props) {
-  const isReadOnly = project.role === 'LECTOR'
+  const [historicalView, setHistoricalView] = useState<{ snapshot: DiagramFullView; version: VersionSummary; changes?: VersionChange[]; before?: DiagramFullView; beforeVersion?: VersionSummary } | null>(null)
+  const [historicalNodeMeasurements, setHistoricalNodeMeasurements] = useState<Record<string, { width?: number; height?: number }>>({})
+  const isReadOnly = project.role === 'LECTOR' || historicalView !== null
 
   const [diagram, setDiagram] = useState<DiagramSummary | null>(null)
   const [elementsRaw, setElementsRaw] = useState<ElementDetail[]>([])
@@ -688,24 +692,35 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   // Transformar datos del backend a nodos de React Flow preservando selección
   const buildNodes = useCallback(
     (elements: ElementDetail[], previousNodes?: UmlNodeType[]): UmlNodeType[] => {
-      const selectedMap = new Map((previousNodes ?? nodesRef.current ?? []).map((n) => [n.id, !!n.selected]))
-      return elements.map((el) => ({
-        id: el.id,
-        type: 'umlClass',
-        position: { x: el.posicionX, y: el.posicionY },
-        selected: selectedMap.get(el.id) ?? false,
-        data: {
-          elementId: el.id,
-          name: el.nombre,
-          elementType: el.tipoElemento,
-          propertiesJson: el.propiedadesJson,
-          readOnly: isReadOnly,
-          onEdit: handleEditElement,
-          onDelete: requestDeleteElement
+      const previousById = new Map((previousNodes ?? nodesRef.current ?? []).map((node) => [node.id, node]))
+      return elements.map((el) => {
+        const previous = previousById.get(el.id)
+        const measured = historicalNodeMeasurements[el.id] ?? previous?.measured
+        return {
+          ...(previous ? {
+            width: previous.width,
+            height: previous.height,
+            initialWidth: previous.initialWidth,
+            initialHeight: previous.initialHeight
+          } : {}),
+          ...(measured ? { measured } : {}),
+          id: el.id,
+          type: 'umlClass',
+          position: { x: el.posicionX, y: el.posicionY },
+          selected: previous?.selected ?? false,
+          data: {
+            elementId: el.id,
+            name: el.nombre,
+            elementType: el.tipoElemento,
+            propertiesJson: el.propiedadesJson,
+            readOnly: isReadOnly,
+            onEdit: handleEditElement,
+            onDelete: requestDeleteElement
+          }
         }
-      }))
+      })
     },
-    [isReadOnly, handleEditElement, requestDeleteElement]
+    [isReadOnly, handleEditElement, requestDeleteElement, historicalNodeMeasurements]
   )
 
   // Transformar datos de relaciones a aristas de React Flow
@@ -811,6 +826,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
   const handleFullDiagramUpdated = useCallback(
     (full: DiagramFullView) => {
+      setHistoricalView(null)
       setLoadedBaseDiagramId(full.diagram.id)
       setDiagram(full.diagram)
       setElementsRaw(full.elements)
@@ -822,9 +838,21 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     [buildNodes, buildEdges, setNodes, setEdges]
   )
 
+  const fitUpdatedDiagram = useCallback(() => {
+    window.setTimeout(() => {
+      void flowInstance.current?.fitView({ padding: 0.25, maxZoom: 1.15, duration: 180 })
+    }, 180)
+  }, [])
+
+  const handleRestoredDiagram = useCallback((full: DiagramFullView) => {
+    handleFullDiagramUpdated(full)
+    fitUpdatedDiagram()
+  }, [fitUpdatedDiagram, handleFullDiagramUpdated])
+
   // Sincronizar cola de operaciones pendientes al reconectar a internet (CU10)
   const flushPendingQueue = useCallback(
     async (diagramId: string) => {
+      if (historicalView) return
       const queue = getOfflineQueue(diagramId)
       if (queue.length === 0) return
 
@@ -956,7 +984,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         setIsSyncingQueue(false)
       }
     },
-    [project.id, auth.token]
+    [project.id, auth.token, historicalView]
   )
 
   // Escuchar eventos de conexión a internet (CU10 Requerimiento 7)
@@ -1865,7 +1893,6 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     }
   }
 
-  const selectedCount = useMemo(() => nodes.filter((n) => n.selected).length, [nodes])
   // A render-only projection: canonical nodes/raw entities and offline snapshots stay untouched.
   const previewGraph = useMemo(() => {
     if (!canvasProposal.active || loadedBaseDiagramId !== diagram?.id
@@ -1876,6 +1903,82 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       buildNodes(projected.elements.filter(el => projected.marks[el.id]), nodes).map(node => ({ ...node, data: { ...node.data, readOnly: true, previewKind: projected.marks[node.id].kind, previewMembers: projected.marks[node.id].members, previewFields: projected.marks[node.id].fields } })),
       buildEdges(projected.relations, projected.elements).filter(edge => projected.relationMarks[edge.id]).map(edge => greenPreviewEdge(edge, projected.relationMarks[edge.id])))
   }, [nodes, edges, elementsRaw, relationsRaw, canvasProposal.active, buildNodes, buildEdges, loadedBaseDiagramId, diagram?.id])
+
+  const displayedGraph = useMemo(() => {
+    if (!historicalView) return previewGraph
+    const snapshot = historicalView.snapshot
+    const viewNodes = buildNodes(snapshot.elements, nodes).map(node => ({ ...node, selected: false, data: { ...node.data, readOnly: true } }))
+    const viewEdges = buildEdges(snapshot.relations, snapshot.elements)
+    if (!historicalView.changes) return { nodes: viewNodes, edges: viewEdges }
+    const changedClassIds = new Set(historicalView.changes.filter(change => change.entity !== 'RELACIÓN').map(change => change.id.split(':')[0]))
+    const changedRelationIds = new Set(historicalView.changes.filter(change => change.entity === 'RELACIÓN').map(change => change.id))
+    const removedClasses = (historicalView.before?.elements || []).filter(item => !snapshot.elements.some(current => current.id === item.id))
+    const ghostNodes = buildNodes(removedClasses, nodes).map(node => ({ ...node, selected: false, className: 'version-removed-node', style: { border: '2px dashed #16a34a' }, data: { ...node.data, name: `${node.data.name} (eliminada)`, readOnly: true } }))
+    const removedRelations = (historicalView.before?.relations || []).filter(item => !snapshot.relations.some(current => current.id === item.id))
+    const ghostEdges = buildEdges(removedRelations, historicalView.before?.elements || []).map(edge => ({ ...edge, id: `removed-${edge.id}`, label: `${edge.label || ''} (eliminada)`, style: { ...edge.style, stroke: '#16a34a', strokeWidth: 3, strokeDasharray: '5 4' } }))
+    return {
+      nodes: [...viewNodes.map(node => changedClassIds.has(node.id) ? { ...node, className: 'version-changed-node' } : node), ...ghostNodes],
+      edges: [...viewEdges.map(edge => changedRelationIds.has(edge.id) ? { ...edge, style: { ...edge.style, stroke: '#16a34a', strokeWidth: 3 } } : edge), ...ghostEdges]
+    }
+  }, [historicalView, previewGraph, buildNodes, buildEdges, nodes])
+
+  useEffect(() => {
+    if (!historicalView || displayedGraph.nodes.length === 0) return
+    const timer = window.setTimeout(() => {
+      void flowInstance.current?.fitView({
+        nodes: displayedGraph.nodes.map(node => ({ id: node.id })),
+        padding: 0.25,
+        maxZoom: 1.15,
+        duration: 180
+      })
+    }, 120)
+    return () => window.clearTimeout(timer)
+  }, [historicalView?.version.id, historicalView?.beforeVersion?.id])
+
+  const handleFlowNodesChange = useCallback((changes: NodeChange<UmlNodeType>[]) => {
+    if (!historicalView) {
+      onNodesChange(changes)
+      return
+    }
+    // En modo histórico solo aceptamos mediciones de React Flow para renderizar nodos y aristas.
+    const dimensions = changes.filter(change => change.type === 'dimensions')
+    if (dimensions.length) {
+      setHistoricalNodeMeasurements(current => {
+        const next = { ...current }
+        for (const change of dimensions) {
+          if (change.type === 'dimensions' && change.dimensions) next[change.id] = change.dimensions
+        }
+        return next
+      })
+      onNodesChange(dimensions)
+    }
+  }, [historicalView, onNodesChange])
+
+  async function returnToCurrentVersion() {
+    if (!diagram) return
+    try {
+      const full = await request<DiagramFullView>(`/api/projects/${project.id}/diagrams/${diagram.id}`, auth.token)
+      handleFullDiagramUpdated(full)
+      fitUpdatedDiagram()
+      setSavingStatus('Versión actual cargada')
+    } catch (err) { onError(err) }
+  }
+
+  async function navigateHistory(offset: -1 | 1) {
+    if (!historicalView || !diagram) return
+    try {
+      const number = historicalView.version.numeroVersion + offset
+      if (number < 1) return
+      const detail = await request<VersionSummary & { snapshotJson: string }>(`/api/projects/${project.id}/diagrams/${diagram.id}/versions/at/${number}`, auth.token)
+      const snapshot = JSON.parse(detail.snapshotJson) as DiagramFullView
+      setHistoricalNodeMeasurements({})
+      setHistoricalView(previous => previous?.before && previous.beforeVersion
+        ? { snapshot, version: detail, before: previous.before, beforeVersion: previous.beforeVersion, changes: compareVersions(previous.before, snapshot) }
+        : { snapshot, version: detail })
+    } catch (err) { if (!(err instanceof ApiRequestError && err.status === 404)) onError(err) }
+  }
+
+  const selectedCount = useMemo(() => nodes.filter((n) => n.selected).length, [nodes])
   function focusProposalChanges() {
     const ids = affectedPreviewNodeIds(canvasProposal.active, previewGraph.nodes, previewGraph.edges)
     if (ids.length) void flowInstance.current?.fitView({ nodes: ids.map(id => ({ id })), padding: 0.4, maxZoom: 1.2, duration: 350 })
@@ -2118,7 +2221,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       {/* Contenedor React Flow con Selección Múltiple y Expansión Manual del Lienzo */}
       <div
         ref={viewportRef}
-        className={`uml-canvas-viewport ${isResizingCanvas ? 'is-resizing-canvas' : ''} ${canvasProposal.active ? 'acodi-preview-active' : ''}`}
+        className={`uml-canvas-viewport ${isResizingCanvas ? 'is-resizing-canvas' : ''} ${canvasProposal.active ? 'acodi-preview-active' : ''} ${historicalView ? 'is-historical-view' : ''}`}
         style={
           canvasCustomSize.width && canvasCustomSize.height
             ? {
@@ -2137,27 +2240,35 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
               }
         }
       >
-        <CanvasProposalBar key={canvasProposal.active?.id || 'none'} active={canvasProposal.active} pending={canvasProposal.pending}
+        {historicalView && <div className="version-history-banner" role="status">
+          <strong>{historicalView.changes ? 'Comparación histórica' : 'Visualizando versión histórica'} · v{historicalView.version.numeroVersion}</strong>
+          {historicalView.changes && <span>{historicalView.changes.length} cambio(s) entre v{historicalView.beforeVersion?.numeroVersion} y v{historicalView.version.numeroVersion}</span>}
+          {historicalView.changes && <details><summary>Ver diferencias</summary><ul>{historicalView.changes.map((change, index) => <li key={`${change.entity}-${change.id}-${index}`}>{change.action}: {change.entity} — {change.label}</li>)}</ul></details>}
+          <button type="button" onClick={() => void navigateHistory(-1)}>Anterior</button>
+          <button type="button" onClick={() => void navigateHistory(1)}>Siguiente</button>
+          <button type="button" onClick={() => void returnToCurrentVersion()}>Volver a la actual</button>
+        </div>}
+        {!historicalView && <CanvasProposalBar key={canvasProposal.active?.id || 'none'} active={canvasProposal.active} pending={canvasProposal.pending}
           editable={!isReadOnly && isOnline && pendingQueueCount === 0} busy={canvasProposal.busy} error={canvasProposal.error}
           stale={Boolean(canvasProposal.active && (canvasProposal.active.status === 'CONFLICTO' || canvasProposal.active.baseRevision !== diagram?.revision))}
-          onSelect={canvasProposal.select} onApprove={canvasProposal.approve} onReject={canvasProposal.reject} onRegenerate={canvasProposal.regenerate} onFocus={focusProposalChanges} />
+          onSelect={canvasProposal.select} onApprove={canvasProposal.approve} onReject={canvasProposal.reject} onRegenerate={canvasProposal.regenerate} onFocus={focusProposalChanges} />}
         <ReactFlow
           onInit={instance => { flowInstance.current = instance }}
-          nodes={previewGraph.nodes}
-          edges={previewGraph.edges}
-          onNodesChange={canvasProposal.active ? undefined : onNodesChange}
-          onEdgesChange={canvasProposal.active ? undefined : onEdgesChange}
-          onConnect={canvasProposal.active ? undefined : handleConnect}
-          onReconnect={canvasProposal.active ? undefined : handleReconnect}
-          onNodeDragStop={canvasProposal.active ? undefined : handleNodeDragStop}
-          onEdgeClick={canvasProposal.active ? undefined : handleEdgeClick}
+          nodes={displayedGraph.nodes}
+          edges={displayedGraph.edges}
+          onNodesChange={canvasProposal.active && !historicalView ? undefined : handleFlowNodesChange}
+          onEdgesChange={historicalView || canvasProposal.active ? undefined : onEdgesChange}
+          onConnect={historicalView || canvasProposal.active ? undefined : handleConnect}
+          onReconnect={historicalView || canvasProposal.active ? undefined : handleReconnect}
+          onNodeDragStop={historicalView || canvasProposal.active ? undefined : handleNodeDragStop}
+          onEdgeClick={historicalView || canvasProposal.active ? undefined : handleEdgeClick}
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
           nodesDraggable={!isReadOnly && !canvasProposal.active}
-          nodesConnectable={!isReadOnly && !canvasProposal.active}
-          edgesReconnectable={!isReadOnly && !canvasProposal.active}
-          deleteKeyCode={canvasProposal.active ? null : 'Backspace'}
-          elementsSelectable={true}
+          nodesConnectable={!isReadOnly && !historicalView && !canvasProposal.active}
+          edgesReconnectable={!isReadOnly && !historicalView && !canvasProposal.active}
+          deleteKeyCode={historicalView || canvasProposal.active ? null : 'Backspace'}
+          elementsSelectable={!historicalView}
           selectionOnDrag={true}
           selectionMode={SelectionMode.Partial}
           panOnDrag={[1, 2]}
@@ -2166,7 +2277,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         >
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#cbd5e1" />
           <Controls />
-          <MiniMap nodeStrokeWidth={3} zoomable pannable />
+          {!historicalView && <MiniMap nodeStrokeWidth={3} zoomable pannable />}
         </ReactFlow>
 
         {/* Control de expansión manual del área de trabajo (Esquina inferior derecha) */}
@@ -2312,14 +2423,20 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
       {/* Modal de Versiones (CU09) */}
       {showVersions && diagram && (
-        <VersionsModal
+        <VersionHistoryModal
           projectId={project.id}
           diagramId={diagram.id}
           token={auth.token}
           revision={diagram.revision}
           isReadOnly={isReadOnly}
           onClose={() => setShowVersions(false)}
-          onRestored={handleFullDiagramUpdated}
+          onView={(snapshot, version) => { setHistoricalNodeMeasurements({}); setHistoricalView({ snapshot, version }); setShowVersions(false) }}
+          onCompare={(before, beforeVersion, after, afterVersion) => {
+            setHistoricalNodeMeasurements({})
+            setHistoricalView({ snapshot: after, version: afterVersion, before, beforeVersion, changes: compareVersions(before, after) })
+            setShowVersions(false)
+          }}
+          onRestored={handleRestoredDiagram}
           onError={onError}
         />
       )}

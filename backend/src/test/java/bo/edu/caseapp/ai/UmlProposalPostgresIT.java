@@ -93,7 +93,7 @@ class UmlProposalPostgresIT {
     long before=revision(); var proposal=prepare(owner,null);
     assertEquals(before,revision()); assertEquals(1,count("elemento_uml")); assertEquals(3,proposal.preview().changes().size());
     var result=apply(proposal,editor,false); assertEquals(Status.APLICADA,result.status()); assertEquals(before+1,revision());
-    assertEquals(editor.getId(),result.decisionBy()); assertNotNull(result.versionId()); assertEquals(2,count("elemento_uml")); assertEquals(1,count("relacion_uml"));
+    assertEquals(editor.getId(),result.decisionBy()); assertNull(result.versionId()); assertEquals(2,count("elemento_uml")); assertEquals(1,count("relacion_uml"));
     var model=uml.getDiagram(project.getId(),diagram,owner.getEmail());
     var updated=model.elements().stream().filter(e->e.id().equals(venta)).findFirst().orElseThrow();
     assertEquals("BigDecimal",mapper.readTree(updated.propiedadesJson()).path("attributes").get(0).path("type").asText());
@@ -146,7 +146,7 @@ class UmlProposalPostgresIT {
       throw new IllegalStateException("Injected failure after class writes");
     }).when(uml).createRelation(eq(project.getId()),eq(diagram),anyString(),any(UmlRequests.SaveRelation.class));
     assertThrows(BadRequestException.class,()->apply(proposal,owner,false));
-    assertEquals(before,revision()); assertEquals(1,count("elemento_uml")); assertEquals(0,count("relacion_uml")); assertEquals(0,count("version_diagrama"));
+    assertEquals(before,revision()); assertEquals(1,count("elemento_uml")); assertEquals(0,count("relacion_uml")); assertEquals(1,count("version_diagrama"));
     assertEquals(Status.FALLIDA,store.get(project.getId(),diagram,proposal.id(),owner.getEmail()).status()); assertEquals(2,count("ai_proposal_audit"));
     assertEquals("UML_PROPOSAL_CHANGED",mapper.readTree(inbox.messages.poll(2,TimeUnit.SECONDS)).path("type").asText());
     assertNull(inbox.messages.poll(250,TimeUnit.MILLISECONDS)); // No committed UML mutation event.

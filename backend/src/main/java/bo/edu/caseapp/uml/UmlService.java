@@ -25,6 +25,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class UmlService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private bo.edu.caseapp.ai.AiAnalysisQueue aiAnalysisQueue;
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private org.springframework.context.ApplicationEventPublisher eventPublisher;
   private enum SaveMode { CREATE, UPDATE }
   private record Batch(UUID diagramId, long baseRevision, long revision) { }
   private final ThreadLocal<Batch> activeBatch = new ThreadLocal<>();
@@ -68,17 +70,31 @@ public class UmlService {
   }
 
   public void notifyCollabAfterCommit(UUID diagramId, String eventType, Long revision) {
+    notifyCollabAfterCommit(diagramId, eventType, revision, null);
+  }
+
+  public void notifyCollabAfterCommit(UUID diagramId, String eventType, Long revision, String actorEmail) {
+    notifyCollabAfterCommit(diagramId, eventType, revision, actorEmail, null);
+  }
+
+  public void notifyCollabAfterCommit(UUID diagramId, String eventType, Long revision, String actorEmail, String sourceOverride) {
     if (activeBatch.get() != null && activeBatch.get().diagramId().equals(diagramId)) return;
-    if (collabHandler == null || diagramId == null) return;
+    if (diagramId == null) return;
+    String source = sourceOverride != null ? sourceOverride : "PROPOSAL_APPLIED".equals(eventType) ? "ACODI"
+        : eventType != null && (eventType.contains("IMPORT") || eventType.contains("XMI")) ? "IMPORT" : "UML_EDIT";
     if (TransactionSynchronizationManager.isSynchronizationActive()) {
       TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
         @Override
         public void afterCommit() {
-          collabHandler.broadcastDiagramChanged(diagramId, eventType, revision);
+          if (collabHandler != null) collabHandler.broadcastDiagramChanged(diagramId, eventType, revision);
+          if (actorEmail != null && revision != null && eventPublisher != null)
+            eventPublisher.publishEvent(new bo.edu.caseapp.versioning.UmlVersionCaptureRequested(diagramId, actorEmail, revision, source));
         }
       });
     } else {
-      collabHandler.broadcastDiagramChanged(diagramId, eventType, revision);
+      if (collabHandler != null) collabHandler.broadcastDiagramChanged(diagramId, eventType, revision);
+      if (actorEmail != null && revision != null && eventPublisher != null)
+        eventPublisher.publishEvent(new bo.edu.caseapp.versioning.UmlVersionCaptureRequested(diagramId, actorEmail, revision, source));
     }
   }
 
@@ -116,6 +132,11 @@ public class UmlService {
   /** One CAS and one post-commit event; all writes still use the normal UML business methods. */
   public <T> T mutateBatch(UUID projectId, UUID diagramId, String email, long expectedRevision,
       java.util.function.Supplier<T> operations) {
+    return mutateBatch(projectId, diagramId, email, expectedRevision, "UML_EDIT", "UML_BATCH_UPDATED", operations);
+  }
+
+  public <T> T mutateBatch(UUID projectId, UUID diagramId, String email, long expectedRevision,
+      String source, String eventType, java.util.function.Supplier<T> operations) {
     if (activeBatch.get() != null) throw new BadRequestException("No se admiten lotes UML anidados.");
     projectService.requireCanEdit(projectId, email);
     DiagramaClase diagram = findDiagram(projectId, diagramId);
@@ -125,7 +146,7 @@ public class UmlService {
     activeBatch.set(new Batch(diagramId, expectedRevision, next));
     T result;
     try { result = operations.get(); } finally { activeBatch.remove(); }
-    notifyCollabAfterCommit(diagramId, "PROPOSAL_APPLIED", next);
+    notifyCollabAfterCommit(diagramId, eventType, next, email, source);
     return result;
   }
 
@@ -150,12 +171,14 @@ public class UmlService {
     // Si no hay diagramas y el usuario puede editar, creamos el diagrama inicial
     projectService.requireCanEdit(projectId, email);
     DiagramaClase nuevo = diagrams.save(new DiagramaClase(member.getProject(), "Diagrama Principal", "Diagrama de clases inicial"));
+    notifyCollabAfterCommit(nuevo.getId(), "DIAGRAM_CREATED", nuevo.getRevision(), email, "INITIAL");
     return summary(nuevo);
   }
 
   public DiagramSummary createDiagram(UUID projectId, String email, CreateDiagram request) {
     ProjectMember member = projectService.requireCanEdit(projectId, email);
     DiagramaClase diagram = diagrams.save(new DiagramaClase(member.getProject(), request.nombre().trim(), clean(request.descripcion())));
+    notifyCollabAfterCommit(diagram.getId(), "DIAGRAM_CREATED", diagram.getRevision(), email, "INITIAL");
     return summary(diagram);
   }
 
@@ -232,7 +255,7 @@ public class UmlService {
     diagram.setRevision(newRev);
 
     diagram.update(newNombre, newDesc);
-    notifyCollab(diagramId, "DIAGRAM_UPDATED", newRev);
+    notifyCollabAfterCommit(diagramId, "DIAGRAM_UPDATED", newRev, email);
     return summary(diagram);
   }
 
@@ -328,7 +351,7 @@ public class UmlService {
     }
     ElementoUML persisted = created ? saveNewElement(element) : elements.save(element);
     ElementDetail saved = elementDetail(persisted);
-    notifyCollab(diagramId, "ELEMENT_SAVED", diagram.getRevision());
+    notifyCollabAfterCommit(diagramId, "ELEMENT_SAVED", diagram.getRevision(), email);
     return saved;
   }
 
@@ -349,7 +372,7 @@ public class UmlService {
         }
       });
     }
-    notifyCollab(diagramId, "POSITIONS_SYNCED", newRev);
+    notifyCollabAfterCommit(diagramId, "POSITIONS_SYNCED", newRev, email);
   }
 
   public void deleteElement(UUID projectId, UUID diagramId, String email, UUID elementId) {
@@ -370,7 +393,7 @@ public class UmlService {
     // Eliminar relaciones conectadas
     relations.deleteByElementoOrigenIdOrElementoDestinoId(elementId, elementId);
     elements.delete(element);
-    notifyCollab(diagramId, "ELEMENT_DELETED", newRev);
+    notifyCollabAfterCommit(diagramId, "ELEMENT_DELETED", newRev, email);
   }
 
   public void deleteElements(UUID projectId, UUID diagramId, String email, List<UUID> elementIds, Long expectedRevision) {
@@ -387,7 +410,7 @@ public class UmlService {
     diagram.setRevision(newRev);
     for (UUID elementId : uniqueIds) relations.deleteByElementoOrigenIdOrElementoDestinoId(elementId, elementId);
     elements.deleteAll(selected);
-    notifyCollab(diagramId, "ELEMENTS_DELETED", newRev);
+    notifyCollabAfterCommit(diagramId, "ELEMENTS_DELETED", newRev, email);
   }
 
   public RelationDetail saveRelation(UUID projectId, UUID diagramId, String email, SaveRelation request) {
@@ -521,7 +544,7 @@ public class UmlService {
     }
     RelacionUML persisted = created ? saveNewRelation(relation) : relations.save(relation);
     RelationDetail saved = relationDetail(persisted);
-    notifyCollab(diagramId, "RELATION_SAVED", diagram.getRevision());
+    notifyCollabAfterCommit(diagramId, "RELATION_SAVED", diagram.getRevision(), email);
     return saved;
   }
 
@@ -541,7 +564,7 @@ public class UmlService {
     long newRev = reserveNextRevision(diagramId, expectedRevision);
     diagram.setRevision(newRev);
     relations.delete(relation);
-    notifyCollab(diagramId, "RELATION_DELETED", newRev);
+    notifyCollabAfterCommit(diagramId, "RELATION_DELETED", newRev, email);
   }
 
   private DiagramaClase findDiagram(UUID projectId, UUID diagramId) {

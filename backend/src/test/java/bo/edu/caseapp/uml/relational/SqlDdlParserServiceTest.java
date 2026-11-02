@@ -5,7 +5,6 @@ import bo.edu.caseapp.project.ProjectRole;
 import bo.edu.caseapp.project.ProjectService;
 import bo.edu.caseapp.uml.*;
 import bo.edu.caseapp.uml.UmlResponses.DiagramFullView;
-import bo.edu.caseapp.uml.collab.UmlWebSocketHandler;
 import bo.edu.caseapp.uml.relational.SqlDdlParserService.ParsedTable;
 import bo.edu.caseapp.user.User;
 import java.util.*;
@@ -29,7 +28,6 @@ class SqlDdlParserServiceTest {
   @Mock private RelacionUMLRepository relationRepo;
   @Mock private ProjectService projectService;
   @Mock private UmlService umlService;
-  @Mock private UmlWebSocketHandler wsHandler;
 
   @InjectMocks
   private SqlDdlParserService service;
@@ -149,6 +147,6 @@ class SqlDdlParserServiceTest {
     assertThat(result).isNotNull();
     verify(projectService).requireCanEdit(project.getId(), "admin@test.bo");
     verify(elementRepo, times(1)).save(any(ElementoUML.class));
-    verify(wsHandler).broadcastDiagramChanged(eq(diagram.getId()), eq("SQL_IMPORTED"));
+    verify(umlService).notifyCollabAfterCommit(eq(diagram.getId()), eq("SQL_IMPORTED"), anyLong(), eq("admin@test.bo"), eq("IMPORT"));
   }
 }

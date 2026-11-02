@@ -19,14 +19,13 @@ public class UmlProposalExecutor {
   private final UmlProposalEngine engine;
   private final UmlService uml;
   private final ProjectService projects;
-  private final VersionService versions;
   private final JdbcTemplate jdbc;
   private final AiConversationStore conversations;
   @PersistenceContext private EntityManager entities;
   @org.springframework.beans.factory.annotation.Autowired private UmlCanvasProposalState canvas;
   public UmlProposalExecutor(UmlProposalStore store,UmlProposalEngine engine,UmlService uml,ProjectService projects,
-      VersionService versions,JdbcTemplate jdbc,AiConversationStore conversations) {
-    this.store=store; this.engine=engine; this.uml=uml; this.projects=projects; this.versions=versions; this.jdbc=jdbc; this.conversations=conversations;
+      JdbcTemplate jdbc,AiConversationStore conversations) {
+    this.store=store; this.engine=engine; this.uml=uml; this.projects=projects; this.jdbc=jdbc; this.conversations=conversations;
   }
   @Transactional
   public UmlProposalStore.View apply(UUID projectId,UUID diagramId,UUID id,String email,Apply request) {
@@ -43,8 +42,7 @@ public class UmlProposalExecutor {
     var preview=store.preview(row);
     if(engine.destructive(preview.changes()) && !request.confirmDestructive()) throw new ConfirmationRequired();
     var before=uml.getDiagram(projectId,diagramId,email); engine.verify(before,preview);
-    var version=versions.createVersion(projectId,diagramId,email,new VersionRequests.CreateVersion("Antes de propuesta "+id));
-    uml.mutateBatch(projectId,diagramId,email,base,()-> {
+    uml.mutateBatch(projectId,diagramId,email,base,"ACODI","PROPOSAL_APPLIED",()-> {
       for(Change change:preview.changes()) if(change.entity()==EntityKind.RELATION && change.kind()==ChangeKind.DELETE) uml.deleteRelation(projectId,diagramId,email,change.id(),base);
       for(Change change:preview.changes()) if(change.entity()==EntityKind.CLASS && change.kind()!=ChangeKind.DELETE) writeClass(projectId,diagramId,email,change,base);
       for(Change change:preview.changes()) if(change.entity()==EntityKind.RELATION && change.kind()!=ChangeKind.DELETE) writeRelation(projectId,diagramId,email,change,base);
@@ -57,8 +55,8 @@ public class UmlProposalExecutor {
     long revision=uml.getDiagramRevision(diagramId);
     jdbc.update("""
         UPDATE ai_uml_proposal SET status='APLICADA',decision_by=?,decided_at=now(),applied_at=now(),applied_revision=?,
-          application_key=?,version_id=?,result_code='APPLIED' WHERE id=?
-        """,member.getUser().getId(),revision,request.clientRequestId(),version.id(),id);
+          application_key=?,version_id=NULL,result_code='APPLIED' WHERE id=?
+        """,member.getUser().getId(),revision,request.clientRequestId(),id);
     store.audit(id,member.getUser().getId(),"APPLIED","APPLIED");
     canvas.decided(diagramId,id,(String)row.get("scope"));
     if(row.get("conversation_id")!=null) conversations.publishProposalDecision(projectId,(UUID)row.get("conversation_id"),email,"aplicó una propuesta UML",revision);

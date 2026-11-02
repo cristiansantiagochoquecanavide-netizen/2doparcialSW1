@@ -13,7 +13,11 @@ public final class VersionResponses {
       String descripcion,
       String autorNombre,
       String autorEmail,
-      Instant fecha
+      Instant fecha,
+      long sourceRevision,
+      String operationType,
+      UUID restoredFromVersionId,
+      boolean working
   ) {}
 
   public record VersionDetail(
@@ -24,6 +28,10 @@ public final class VersionResponses {
       String snapshotJson,
       String autorNombre,
       String autorEmail,
-      Instant fecha
+      Instant fecha,
+      long sourceRevision,
+      String operationType,
+      UUID restoredFromVersionId,
+      boolean working
   ) {}
 }

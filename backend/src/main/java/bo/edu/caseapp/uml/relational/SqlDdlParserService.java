@@ -5,7 +5,6 @@ import bo.edu.caseapp.error.NotFoundException;
 import bo.edu.caseapp.project.ProjectService;
 import bo.edu.caseapp.uml.*;
 import bo.edu.caseapp.uml.UmlResponses.DiagramFullView;
-import bo.edu.caseapp.uml.collab.UmlWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -23,7 +22,6 @@ public class SqlDdlParserService {
   private final RelacionUMLRepository relationRepo;
   private final ProjectService projectService;
   private final UmlService umlService;
-  private final UmlWebSocketHandler wsHandler;
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   public SqlDdlParserService(
@@ -31,15 +29,13 @@ public class SqlDdlParserService {
       ElementoUMLRepository elementRepo,
       RelacionUMLRepository relationRepo,
       ProjectService projectService,
-      UmlService umlService,
-      UmlWebSocketHandler wsHandler
+      UmlService umlService
   ) {
     this.diagramRepo = diagramRepo;
     this.elementRepo = elementRepo;
     this.relationRepo = relationRepo;
     this.projectService = projectService;
     this.umlService = umlService;
-    this.wsHandler = wsHandler;
   }
 
   public DiagramFullView parseAndImportSql(UUID projectId, UUID diagramId, String email, String sqlContent) {
@@ -144,20 +140,7 @@ public class SqlDdlParserService {
       }
     }
 
-    if (wsHandler != null) {
-      if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
-        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
-            new org.springframework.transaction.support.TransactionSynchronization() {
-              @Override
-              public void afterCommit() {
-                wsHandler.broadcastDiagramChanged(diagramId, "SQL_IMPORTED");
-              }
-            }
-        );
-      } else {
-        wsHandler.broadcastDiagramChanged(diagramId, "SQL_IMPORTED");
-      }
-    }
+    umlService.notifyCollabAfterCommit(diagramId, "SQL_IMPORTED", newRev, email, "IMPORT");
     return umlService.getDiagram(projectId, diagramId, email);
   }
 

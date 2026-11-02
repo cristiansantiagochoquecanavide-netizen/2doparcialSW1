@@ -909,7 +909,7 @@ public class XmiService {
         }
       }
 
-      umlService.notifyCollabAfterCommit(diagramId, "XMI_IMPORTED", newRev);
+      umlService.notifyCollabAfterCommit(diagramId, "XMI_IMPORTED", newRev, email);
       return umlService.getDiagram(projectId, diagramId, email);
 
     } catch (Exception e) {
@@ -1027,7 +1027,7 @@ public class XmiService {
         }
       }
 
-      umlService.notifyCollabAfterCommit(diagramId, "JSON_IMPORTED", newRev);
+    umlService.notifyCollabAfterCommit(diagramId, "JSON_IMPORTED", newRev, email);
       return umlService.getDiagram(projectId, diagramId, email);
 
     } catch (Exception e) {

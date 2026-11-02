@@ -1367,3 +1367,33 @@ main.workspace-page > .error { margin: .75rem 1rem; }
 @media (max-width: 1050px) { .workspace-grid { grid-template-columns: 170px 5px minmax(250px, 1fr) !important; }.properties-panel, .right-panel-container { display: none; } }
 @media (max-width: 700px) { .workspace-topbar { flex-direction: row; align-items: center; flex-wrap: wrap; height: auto; padding: .65rem; gap: .5rem; }.topbar-status { order: 3; flex-basis: 100%; overflow: auto; }.topbar-diagram { display: none; }.modeling-modes { grid-template-columns: 1fr; padding: .55rem; }.mode-card { min-height: 48px; }.workspace-grid { display: flex; flex-direction: column; overflow: visible; }.tool-sidebar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); max-height: 240px; border-right: 0; border-bottom: 1px solid var(--line); }.tool-sidebar .panel-heading,.tool-group-label,.sidebar-hint { grid-column: 1/-1; }.canvas-column { min-height: 520px; }.properties-panel, .right-panel-container { display: block; }.workspace-footer { gap: .6rem; }.workspace-footer span:nth-child(2),.workspace-footer span:nth-child(3) { display: none; } }
 
+.version-history-banner {
+  position: relative;
+  z-index: 10;
+  top: auto;
+  left: auto;
+  transform: none;
+  align-self: center;
+  margin: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: min(92vw, 900px);
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #93c5fd;
+  border-radius: 0.6rem;
+  color: #1e3a8a;
+  background: #eff6ff;
+  box-shadow: 0 4px 14px #0f172a1a;
+  font-size: 0.85rem;
+}
+.version-history-banner button { flex: 0 0 auto; }
+.version-history-banner details { max-width: 220px; }
+.version-history-banner ul { max-height: 180px; overflow: auto; margin: 0.4rem 0; padding-left: 1.2rem; }
+.version-history-banner li { margin: 0.15rem 0; }
+.uml-canvas-viewport.is-historical-view > .react-flow { height: auto !important; min-height: 0 !important; flex: 1 1 0% !important; }
+.version-changed-node .uml-node-card { outline: 3px solid #16a34a; outline-offset: 2px; }
+.version-removed-node .uml-node-card { opacity: 0.82; border-color: #16a34a; background: #f0fdf4; }
+@media (max-width: 760px) {
+  .version-history-banner { top: auto; left: auto; right: auto; flex-wrap: wrap; max-width: calc(100% - 0.5rem); }
+}

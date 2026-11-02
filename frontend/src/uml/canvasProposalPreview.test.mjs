@@ -75,7 +75,8 @@ test('readers and stale proposals cannot approve and conflict offers regeneratio
 })
 test('preview wiring only projects ReactFlow props and never persists temporary values', async () => {
   const source = await readFile(new URL('./UmlCanvas.tsx', import.meta.url), 'utf8')
-  assert.match(source, /nodes=\{previewGraph.nodes\}/); assert.match(source, /edges=\{previewGraph.edges\}/)
+  assert.match(source, /nodes=\{displayedGraph.nodes\}/); assert.match(source, /edges=\{displayedGraph.edges\}/)
+  assert.ok(source.includes('if (!historicalView) return previewGraph'))
   assert.ok(!source.includes('setElementsRaw(projected')); assert.ok(!source.includes('setNodes(previewGraph'))
   const hook = await readFile(new URL('./useCanvasProposal.ts', import.meta.url), 'utf8')
   assert.match(hook, /case:canvas-proposal/); assert.ok(!hook.includes('offline')); assert.ok(!hook.includes('localStorage'))

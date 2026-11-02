@@ -7,9 +7,15 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 
 public interface DiagramaClaseRepository extends JpaRepository<DiagramaClase, UUID> {
   List<DiagramaClase> findByProjectIdOrderByFechaCreacionAsc(UUID projectId);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("SELECT d FROM DiagramaClase d WHERE d.id = :id")
+  Optional<DiagramaClase> lockById(@Param("id") UUID id);
 
   @Query("SELECT d.revision FROM DiagramaClase d WHERE d.id = :id")
   Optional<Long> findRevisionById(@Param("id") UUID id);

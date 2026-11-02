@@ -793,7 +793,7 @@ public class AiAssistantService {
       warnings.add("No se agregaron elementos nuevos; el contenido existente se conservó.");
       return new ImageReconstructionResponse(false, "No había elementos nuevos para agregar.", 0, 0, umlService.getDiagram(projectId, diagramId, email), List.copyOf(warnings));
     }
-    umlService.notifyCollabAfterCommit(diagramId, request.mode() == ImageImportMode.REPLACE ? "IMAGE_MODEL_REPLACED" : "IMAGE_MODEL_ADDED", newRev);
+    umlService.notifyCollabAfterCommit(diagramId, request.mode() == ImageImportMode.REPLACE ? "IMAGE_MODEL_REPLACED" : "IMAGE_MODEL_ADDED", newRev, email, "IMPORT");
     String message = "Se procesaron " + createdClasses + " elementos y " + createdRelations + " relaciones desde la imagen.";
     iaRepo.save(new InteraccionIa(diagram, user, "RECONSTRUCCION_IMAGEN", "Imagen: " + Objects.toString(request.filename(), "diagrama"), message, null));
     return new ImageReconstructionResponse(true, message, createdClasses, createdRelations, umlService.getDiagram(projectId, diagramId, email), List.copyOf(warnings));
