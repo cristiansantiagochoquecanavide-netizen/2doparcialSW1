@@ -6,6 +6,7 @@ import { useAgentSpeech } from './AgentSpeechUI'
 import { AcodiChannelMessage } from './AcodiChannelMessage'
 import { TeamChannelNavigation, type NavigationItem } from './TeamChannelNavigation'
 import { insertAcodiMention, channelSpeechMessage, channelRecommendationFrame } from './acodiChannelClient.mjs'
+import { scrollChatViewportToLatest } from './scrollChatViewport.mjs'
 
 export interface ChannelItem { id: string; slug: string; name: string; description: string | null; createdAt: string }
 export interface ChatMessage {
@@ -93,7 +94,9 @@ export function LiveTeamChatPanel({
   const activeRef = useRef(activeChannelId)
   const nearBottom = useRef(true)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const endRef = useRef<HTMLDivElement>(null)
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    if (scrollRef.current) scrollChatViewportToLatest(scrollRef.current, behavior)
+  }, [])
   activeRef.current = activeChannelId
 
   const activeChannel = channels.find((channel) => channel.id === activeChannelId) || null
@@ -259,7 +262,7 @@ export function LiveTeamChatPanel({
           if (recommendation) speech.receive(recommendation)
           const scroll = activeRef.current === frame.channelId && nearBottom.current
           setMessages((old) => ({ ...old, [frame.channelId as string]: mergeMessages(old[frame.channelId as string] || [], [msg]) }))
-          if (scroll) requestAnimationFrame(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }))
+          if (scroll) requestAnimationFrame(() => scrollToLatest())
         } catch { /* REST recovers messages after reconnect. */ }
       }
       socket.onclose = (event) => {
@@ -275,14 +278,14 @@ export function LiveTeamChatPanel({
     }
     connect()
     return () => { disposed = true; speech.chat(false); if (timer !== undefined) clearTimeout(timer); socket?.close() }
-  }, [projectId, token, refresh, refreshNavigation, speech.chat, speech.receive])
+  }, [projectId, token, refresh, refreshNavigation, speech.chat, speech.receive, scrollToLatest])
 
   useEffect(() => {
     if (activeChannelId && initialLoaded) {
       nearBottom.current = true
-      endRef.current?.scrollIntoView({ behavior: 'auto' })
+      scrollToLatest('auto')
     }
-  }, [activeChannelId, initialLoaded])
+  }, [activeChannelId, initialLoaded, scrollToLatest])
 
   function onScroll() {
     const node = scrollRef.current
@@ -320,7 +323,7 @@ export function LiveTeamChatPanel({
       if (activeRef.current === message.channelId) setInput((value) => value.trim() === outgoing.content ? '' : value)
       if (drafts.current.get(message.channelId)?.trim() === outgoing.content) drafts.current.delete(message.channelId)
       setRetry(null); nearBottom.current = true
-      requestAnimationFrame(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }))
+      requestAnimationFrame(() => scrollToLatest())
     } catch (error) {
       setRetry(outgoing); setSendError(error instanceof Error ? error.message : 'No se pudo enviar el mensaje.')
     } finally { setSending(false) }
@@ -392,7 +395,6 @@ export function LiveTeamChatPanel({
                           const own = message.senderEmail?.toLowerCase() === currentUser.email.toLowerCase()
                           return <AcodiChannelMessage key={message.id} message={message} own={own} canListen={speech.state.available && !speech.state.microphoneActive && activeTab === 'chat' && visible} canRetry={own} busy={agentBusy} onListen={() => speech.manual(channelSpeechMessage(message), { projectId, conversationId: 'channel:' + activeChannelId, scope: 'GROUP' })} onRetry={() => void retryAcodi(message)} />
                         })}
-                      <div ref={endRef} />
                     </div>
                   </>}
             <form className="team-input-form" onSubmit={submit}>

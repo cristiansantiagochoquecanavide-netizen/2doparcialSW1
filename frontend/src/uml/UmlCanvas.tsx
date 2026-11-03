@@ -43,6 +43,9 @@ import { CodeGeneratorModal } from './CodeGeneratorModal'
 import { AiAssistantModal } from './AiAssistantModal'
 import { VersionHistoryModal, type VersionSummary } from './VersionHistoryModal'
 import { compareVersions, type VersionChange } from './versionDiff.mjs'
+import { layoutUmlGraph } from './autoLayout.mjs'
+import { measureRoutedLayout, routeUmlEdges, scoreUmlCandidates } from './routeUmlEdges.mjs'
+import { createDiagramRequestCoordinator, isStaleDiagramRevision, markPendingQueueForReview, mergePendingPositions, normalizeRelationEndpoint } from './diagramRequestCoordinator.mjs'
 import { XmiModal } from './XmiModal'
 import { ApiTesterModal } from './ApiTesterModal'
 import { WorkspaceChrome } from './WorkspaceChrome'
@@ -56,6 +59,7 @@ import './canvas-proposal.css'
 
 const base = import.meta.env.VITE_API_BASE_URL !== undefined ? import.meta.env.VITE_API_BASE_URL : ''
 const NODE_TYPES = { umlClass: UmlClassNode }
+const diagramRequestCoordinator = createDiagramRequestCoordinator()
 
 type RelationHandleOverride = {
   sourceHandle: string | null
@@ -99,10 +103,7 @@ function normalizeRelationHandle(
   fallbackPosition: Position,
   fallbackSlot: number
 ) {
-  if (!handle) return `${fallbackPosition}-${type}-${fallbackSlot}`
-  const match = /^(top|right|bottom|left)-(source|target)(?:-(0|1|2))?$/.exec(handle)
-  if (!match || match[2] !== type) return `${fallbackPosition}-${type}-${fallbackSlot}`
-  return `${match[1]}-${type}-${match[3] ?? '0'}`
+  return normalizeRelationEndpoint(handle, type, fallbackPosition.toLowerCase() as 'top' | 'right' | 'bottom' | 'left', fallbackSlot)
 }
 
 function positionFromRelationHandle(handle: string | null | undefined, fallback: Position) {
@@ -179,7 +180,7 @@ function buildReflexiveOrthogonalPath(
   return { path, labelX: labelPoint[0], labelY: labelPoint[1] }
 }
 
-type UmlEdgeData = { tipoRelacion?: TipoRelacionUML }
+type UmlEdgeData = { tipoRelacion?: TipoRelacionUML; routePoints?: Array<{ x: number; y: number }> | null; routeLabelPoint?: { x: number; y: number } | null }
 
 function UmlDiamondMarker({ x, y, filled, color }: { x: number; y: number; filled: boolean; color: string }) {
   return (
@@ -215,6 +216,36 @@ function UmlOrthogonalEdge(props: EdgeProps) {
       <UmlDiamondMarker x={props.sourceX} y={props.sourceY} filled={isComposition} color={color} />
     </>
   )
+}
+
+function UmlRoutedEdge(props: EdgeProps) {
+  const data = props.data as UmlEdgeData | undefined
+  const route = data?.routePoints
+  if (!route || route.length < 2) return data?.tipoRelacion === 'AGREGACION' || data?.tipoRelacion === 'COMPOSICION'
+    ? <UmlOrthogonalEdge {...props} />
+    : <StepEdge {...props} />
+  let points = route.map(point => ({ ...point }))
+  points[0] = { x: props.sourceX, y: props.sourceY }
+  points[points.length - 1] = { x: props.targetX, y: props.targetY }
+  if (points.length > 2) {
+    const first = points[1]
+    const sourceStub = props.sourcePosition === Position.Left || props.sourcePosition === Position.Right
+      ? { x: first.x, y: props.sourceY }
+      : { x: props.sourceX, y: first.y }
+    const last = points[points.length - 2]
+    const targetStub = props.targetPosition === Position.Left || props.targetPosition === Position.Right
+      ? { x: last.x, y: props.targetY }
+      : { x: props.targetX, y: last.y }
+    points = [points[0], sourceStub, ...points.slice(1, -1), targetStub, points.at(-1)!]
+  }
+  const path = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')
+  const labelPoint = data?.routeLabelPoint ?? points[Math.floor((points.length - 1) / 2)]
+  const color = typeof props.style?.stroke === 'string' ? props.style.stroke : '#475569'
+  return <>
+    <BaseEdge path={path} markerStart={props.markerStart} markerEnd={props.markerEnd} style={props.style} className={props.animated ? 'animated' : undefined} interactionWidth={props.interactionWidth} />
+    {props.label && <EdgeLabelRenderer><div className="react-flow__edge-text" style={{ position: 'absolute', transform: `translate(-50%, -50%) translate(${labelPoint.x}px,${labelPoint.y}px)`, pointerEvents: 'all' }}>{props.label}</div></EdgeLabelRenderer>}
+    {(data?.tipoRelacion === 'AGREGACION' || data?.tipoRelacion === 'COMPOSICION') && <UmlDiamondMarker x={props.sourceX} y={props.sourceY} filled={data.tipoRelacion === 'COMPOSICION'} color={color} />}
+  </>
 }
 
 function ReflexiveOrthogonalEdge({
@@ -275,21 +306,70 @@ function ReflexiveOrthogonalEdge({
   )
 }
 
-const EDGE_TYPES = { umlReflexive: ReflexiveOrthogonalEdge, umlOrthogonal: UmlOrthogonalEdge }
+const EDGE_TYPES = { umlReflexive: ReflexiveOrthogonalEdge, umlOrthogonal: UmlOrthogonalEdge, umlRouted: UmlRoutedEdge }
 
 interface ApiResponse<T> {
   data: T
   revision: number | null
 }
 
+function diagramIdFromPath(path: string) {
+  try {
+    const pathname = new URL(path, window.location.origin).pathname
+    const match = pathname.match(/\/diagrams\/([^/]+)/)
+    return match && match[1] !== 'default' ? match[1] : null
+  } catch {
+    return null
+  }
+}
+
+function expectedRevisionFromRequest(options: RequestInit) {
+  const headers = new Headers(options.headers)
+  const header = headers.get('X-Diagram-Revision') ?? headers.get('If-Match')?.replaceAll('"', '')
+  if (header && Number.isFinite(Number(header))) return Number(header)
+  if (typeof options.body === 'string') {
+    try {
+      const body = JSON.parse(options.body) as { expectedRevision?: unknown }
+      if (body.expectedRevision != null && Number.isSafeInteger(Number(body.expectedRevision))) return Number(body.expectedRevision)
+    } catch { /* non-JSON mutation body */ }
+  }
+  return null
+}
+
+function requestWithRevision(options: RequestInit, revision: number): RequestInit {
+  const headers = new Headers(options.headers)
+  headers.set('X-Diagram-Revision', String(revision))
+  let body = options.body
+  if (typeof body === 'string') {
+    try {
+      const parsed = JSON.parse(body)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'expectedRevision' in parsed) {
+        body = JSON.stringify({ ...parsed, expectedRevision: revision })
+      }
+    } catch { /* header remains authoritative */ }
+  }
+  return { ...options, headers, body }
+}
+
 async function requestFull<T>(path: string, token: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
+  const method = (options.method ?? 'GET').toUpperCase()
+  const diagramId = diagramIdFromPath(path)
+  const perform = async (): Promise<ApiResponse<T>> => {
+    let requestOptions = options
+    if (method !== 'GET' && diagramId) {
+      const suppliedRevision = expectedRevisionFromRequest(options)
+      const rebasedRevision = diagramRequestCoordinator.expectedAfterEarlierLocalWrite(diagramId, suppliedRevision)
+      if (rebasedRevision !== suppliedRevision && rebasedRevision != null) {
+        requestOptions = requestWithRevision(options, rebasedRevision)
+      }
+    }
   const url = base ? `${base}${path}` : path
   const response = await fetch(url, {
-    ...options,
+    ...requestOptions,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
-      ...options.headers
+      ...Object.fromEntries(new Headers(requestOptions.headers).entries())
     }
   })
   if (!response.ok) {
@@ -299,7 +379,20 @@ async function requestFull<T>(path: string, token: string, options: RequestInit 
   const revHeader = response.headers.get('X-Diagram-Revision')
   const revision = revHeader ? parseInt(revHeader, 10) : null
   const data = response.status === 204 ? (undefined as T) : ((await response.json()) as T)
+  if (diagramId && revision != null && Number.isSafeInteger(revision)) {
+    if (method === 'GET') diagramRequestCoordinator.observeRevision(diagramId, revision)
+    else diagramRequestCoordinator.confirmLocalWrite(diagramId, revision)
+  }
+  if (method === 'GET' && diagramId && data && typeof data === 'object') {
+    const fullRevision = (data as { diagram?: { revision?: number } }).diagram?.revision
+    if (typeof fullRevision === 'number' && Number.isSafeInteger(fullRevision)) diagramRequestCoordinator.observeRevision(diagramId, fullRevision)
+  }
   return { data, revision }
+  }
+
+  return method === 'GET' || !diagramId
+    ? perform()
+    : diagramRequestCoordinator.enqueueWrite(diagramId, perform)
 }
 
 async function request<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
@@ -326,6 +419,7 @@ function pendingOperationStatus(error: unknown): string {
 
 interface PendingSyncAction extends OfflineAction {
   type: 'SAVE_ELEMENT' | 'UPDATE_ELEMENT' | 'DELETE_ELEMENT' | 'SAVE_POSITIONS' | 'SAVE_RELATION' | 'UPDATE_RELATION' | 'DELETE_RELATION'
+  requiresReview?: boolean
 }
 
 function getOfflineQueue(diagramId: string): PendingSyncAction[] {
@@ -348,14 +442,16 @@ function setOfflineQueue(diagramId: string, queue: PendingSyncAction[]) {
 function appendOfflineQueue(
   diagramId: string,
   action: Omit<PendingSyncAction, 'id' | 'timestamp'>,
-  expectedRevision?: number | null
+  expectedRevision?: number | null,
+  requiresReview = false
 ): number {
   const queue = getOfflineQueue(diagramId)
   queue.push({
     ...action,
     id: crypto.randomUUID(),
     timestamp: Date.now(),
-    expectedRevision: expectedRevision !== undefined ? expectedRevision : ((action as any).expectedRevision ?? null)
+    expectedRevision: expectedRevision !== undefined ? expectedRevision : ((action as any).expectedRevision ?? null),
+    ...(requiresReview ? { requiresReview: true } : {})
   })
   setOfflineQueue(diagramId, queue)
   return queue.length
@@ -382,6 +478,20 @@ function saveServerDiagramSnapshot(diagramId: string, snapshot: DiagramFullView)
     localStorage.setItem(`case.server_snapshot.${diagramId}`, JSON.stringify(snapshot))
   } catch {
     // The server baseline is optional if browser storage is unavailable.
+  }
+}
+
+function estimateUmlNodeHeight(propertiesJson: string) {
+  try {
+    const properties = JSON.parse(propertiesJson || '{}') as { attributes?: unknown[]; methods?: unknown[]; description?: string; stereotype?: string }
+    const attributes = Array.isArray(properties.attributes) ? properties.attributes.length : 0
+    const methods = Array.isArray(properties.methods) ? properties.methods.length : 0
+    const descriptionHeight = typeof properties.description === 'string' && properties.description.trim() ? 22 : 0
+    const stereotypeHeight = typeof properties.stereotype === 'string' && properties.stereotype.trim() ? 14 : 0
+    const attributeRows = Math.max(1, attributes), methodRows = Math.max(1, methods)
+    return 36 + descriptionHeight + stereotypeHeight + 24 + Math.max(18, attributeRows * 16.5) + 24 + Math.max(18, methodRows * 16.5)
+  } catch {
+    return 130
   }
 }
 
@@ -431,6 +541,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   const flowInstance = useRef<ReactFlowInstance<UmlNodeType, Edge> | null>(null)
 
   const [savingStatus, setSavingStatus] = useState<string>('Guardado')
+  const [arrangingDiagram, setArrangingDiagram] = useState(false)
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine)
   const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false)
   const [pendingQueueCount, setPendingQueueCount] = useState<number>(0)
@@ -503,6 +614,21 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   diagramRef.current = diagram
   const nodesRef = useRef(nodes)
   nodesRef.current = nodes
+  const activeQueueFlushesRef = useRef(new Set<string>())
+  const acceptServerRevision = useCallback((diagramId: string, revision: number | null | undefined) => {
+    if (revision == null || !Number.isSafeInteger(revision)) return true
+    const currentRevision = diagramRequestCoordinator.revision(diagramId)
+    if (isStaleDiagramRevision(currentRevision, revision)) return false
+    diagramRequestCoordinator.observeRevision(diagramId, revision)
+    setDiagram(previous => previous?.id === diagramId && (previous.revision ?? 0) < revision
+      ? { ...previous, revision }
+      : previous)
+    return true
+  }, [])
+  const applyConfirmedDiagramRevision = useCallback((diagramId: string) => {
+    const revision = diagramRequestCoordinator.revision(diagramId)
+    if (revision != null) acceptServerRevision(diagramId, revision)
+  }, [acceptServerRevision])
 
   // Callback para abrir edición de elemento (referencia estable)
   const handleEditElement = useCallback((elementId: string) => {
@@ -548,9 +674,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         })
         setElementsRaw(nextElements)
         setRelationsRaw(nextRelations)
-        if (currentDiagram.revision != null) {
-          setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-        }
+        applyConfirmedDiagramRevision(currentDiagram.id)
         saveLocalDiagramSnapshot(currentDiagram.id, currentDiagram, nextElements, nextRelations)
         setSavingStatus('Guardado')
       } catch (err) {
@@ -559,7 +683,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
             `/api/projects/${project.id}/diagrams/${currentDiagram.id}`,
             auth.token
           ).catch(() => null)
-          if (full) {
+          if (full && acceptServerRevision(currentDiagram.id, full.diagram.revision)) {
             setDiagram(full.diagram)
             setElementsRaw(full.elements)
             setRelationsRaw(full.relations)
@@ -583,7 +707,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         setSavingStatus('Guardado localmente (Offline)')
       }
     },
-    [isReadOnly, project.id, auth.token]
+    [isReadOnly, project.id, auth.token, applyConfirmedDiagramRevision, acceptServerRevision]
   )
 
   const requestDeleteElement = useCallback((elementId: string) => {
@@ -637,9 +761,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       )
       setElementsRaw(nextElements)
       setRelationsRaw(nextRelations)
-      if (currentDiagram.revision != null) {
-        setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-      }
+      applyConfirmedDiagramRevision(currentDiagram.id)
       saveLocalDiagramSnapshot(currentDiagram.id, currentDiagram, nextElements, nextRelations)
       setSavingStatus('Guardado')
     } catch (err) {
@@ -648,7 +770,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${currentDiagram.id}`,
           auth.token
         ).catch(() => null)
-        if (full) {
+        if (full && acceptServerRevision(currentDiagram.id, full.diagram.revision)) {
           setDiagram(full.diagram)
           setElementsRaw(full.elements)
           setRelationsRaw(full.relations)
@@ -674,7 +796,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       setPendingQueueCount(count)
       setSavingStatus('Guardado localmente (Offline)')
     }
-  }, [isReadOnly, project.id, auth.token])
+  }, [isReadOnly, project.id, auth.token, applyConfirmedDiagramRevision, acceptServerRevision])
 
   const handleDeleteSelected = useCallback(() => {
     const selectedIds = nodesRef.current.filter((node) => node.selected).map((node) => node.id)
@@ -828,6 +950,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
   const handleFullDiagramUpdated = useCallback(
     (full: DiagramFullView) => {
+      if (!acceptServerRevision(full.diagram.id, full.diagram.revision)) return
       setHistoricalView(null)
       setLoadedBaseDiagramId(full.diagram.id)
       setDiagram(full.diagram)
@@ -837,7 +960,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       setNodes(buildNodes(full.elements))
       setEdges(buildEdges(full.relations, full.elements))
     },
-    [buildNodes, buildEdges, setNodes, setEdges]
+    [buildNodes, buildEdges, setNodes, setEdges, acceptServerRevision]
   )
 
   const fitUpdatedDiagram = useCallback(() => {
@@ -857,6 +980,13 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       if (historicalView) return
       const queue = getOfflineQueue(diagramId)
       if (queue.length === 0) return
+      if (queue.some(action => action.requiresReview)) {
+        setPendingQueueCount(queue.length)
+        setSavingStatus('Conflicto de concurrencia: hay cambios locales pendientes de revisión; confirma su reintento.')
+        return
+      }
+      if (activeQueueFlushesRef.current.has(diagramId)) return
+      activeQueueFlushesRef.current.add(diagramId)
 
       setIsSyncingQueue(true)
       setSavingStatus('Sincronizando...')
@@ -867,6 +997,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           auth.token
         )
         const baseline = loadServerDiagramSnapshot(diagramId)
+        if (!acceptServerRevision(diagramId, serverBefore.diagram.revision)) return
         if (!snapshotContentMatches(baseline, serverBefore)) {
           const optimistic = loadLocalDiagramSnapshot(diagramId)
           if (optimistic && snapshotContentMatches(optimistic, serverBefore)) {
@@ -879,7 +1010,10 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
             setSavingStatus('Guardado')
             return
           }
-          setPendingQueueCount(getOfflineQueue(diagramId).length)
+          const reviewQueue = markPendingQueueForReview(getOfflineQueue(diagramId))
+          setOfflineQueue(diagramId, reviewQueue)
+          setPendingQueueCount(reviewQueue.length)
+          setSavingStatus('Conflicto de concurrencia: el servidor cambió. Se conservaron cambios locales; revisa y confirma el reintento.')
           setSavingStatus('Error al sincronizar: el diagrama cambió en el servidor. Se conservaron los cambios locales; revisa el modelo antes de reintentar.')
           return
         }
@@ -951,12 +1085,13 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
               `/api/projects/${project.id}/diagrams/${diagramId}`,
               auth.token
             ).catch(() => null)
-            if (full) {
+            if (full && acceptServerRevision(diagramId, full.diagram.revision)) {
               saveServerDiagramSnapshot(diagramId, full)
               setDiagram(full.diagram)
-              setElementsRaw(full.elements)
-              setRelationsRaw(full.relations)
             }
+            const reviewQueue = markPendingQueueForReview(pending)
+            setOfflineQueue(diagramId, reviewQueue)
+            setPendingQueueCount(reviewQueue.length)
             setSavingStatus(`Conflicto de concurrencia: el diagrama cambió en el servidor (HTTP 409). Se conservaron ${pending.length} cambio(s) locales; revísalos antes de reintentar.`)
             return
           }
@@ -969,6 +1104,8 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${diagramId}`,
           auth.token
         )
+        if (!acceptServerRevision(diagramId, full.diagram.revision)) return
+        setDiagram(full.diagram)
         setElementsRaw(full.elements)
         setRelationsRaw(full.relations)
         saveServerDiagramSnapshot(diagramId, full)
@@ -983,11 +1120,35 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           ? `Error al sincronizar: ${remaining} cambio(s) se conservaron localmente. ${detail}`
           : `Cambios sincronizados, pero no se pudo actualizar la vista del servidor. ${detail}`)
       } finally {
+        activeQueueFlushesRef.current.delete(diagramId)
         setIsSyncingQueue(false)
       }
     },
-    [project.id, auth.token, historicalView]
+    [project.id, auth.token, historicalView, acceptServerRevision]
   )
+
+  const handleRetryPendingSync = useCallback(async () => {
+    const currentDiagram = diagramRef.current
+    if (!currentDiagram || !isOnline || historicalView) return
+    const queue = getOfflineQueue(currentDiagram.id)
+    if (!queue.some(action => action.requiresReview) || !window.confirm(
+      'Se volverán a enviar los cambios locales usando la revisión actual del servidor. Si otro colaborador modificó los mismos elementos, este reintento aplicará tus cambios después de tu confirmación. ¿Continuar?'
+    )) return
+
+    try {
+      setSavingStatus('Actualizando la base de comparación...')
+      const full = await request<DiagramFullView>(`/api/projects/${project.id}/diagrams/${currentDiagram.id}`, auth.token)
+      if (!acceptServerRevision(currentDiagram.id, full.diagram.revision)) return
+      saveServerDiagramSnapshot(currentDiagram.id, full)
+      const retryQueue = queue.map(action => ({ ...action, requiresReview: false }))
+      setOfflineQueue(currentDiagram.id, retryQueue)
+      setPendingQueueCount(retryQueue.length)
+      await flushPendingQueue(currentDiagram.id)
+    } catch (error) {
+      setSavingStatus('No se pudo actualizar el diagrama antes del reintento. Los cambios locales siguen pendientes.')
+      onError(error)
+    }
+  }, [isOnline, historicalView, project.id, auth.token, acceptServerRevision, flushPendingQueue, onError])
 
   // Escuchar eventos de conexión a internet (CU10 Requerimiento 7)
   useEffect(() => {
@@ -1025,6 +1186,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           if (cachedDiagramId) {
             const cached = loadLocalDiagramSnapshot(cachedDiagramId)
             if (cached && isMounted) {
+              if (cached.diagram?.revision != null) diagramRequestCoordinator.observeRevision(cachedDiagramId, cached.diagram.revision)
               setDiagram(cached.diagram)
               setLoadedBaseDiagramId(cachedDiagramId)
               setElementsRaw(cached.elements)
@@ -1041,6 +1203,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           auth.token
         )
         if (!isMounted) return
+        if (def.revision != null) diagramRequestCoordinator.observeRevision(def.id, def.revision)
         setDiagram(def)
         localStorage.setItem(`case.last_diagram.${project.id}`, def.id)
 
@@ -1049,15 +1212,24 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           auth.token
         )
         if (!isMounted) return
-        setElementsRaw(full.elements)
-        setRelationsRaw(full.relations)
+        if (!acceptServerRevision(def.id, full.diagram.revision)) return
+        const pendingQueue = getOfflineQueue(def.id)
+        const localPending = pendingQueue.length > 0 ? loadLocalDiagramSnapshot(def.id) : null
+        const displayElements = localPending?.elements ?? mergePendingPositions(full.elements, pendingQueue)
+        const displayRelations = localPending?.relations ?? full.relations
+        setDiagram(full.diagram)
+        setElementsRaw(displayElements)
+        setRelationsRaw(displayRelations)
         setLoadedBaseDiagramId(def.id)
         saveServerDiagramSnapshot(def.id, full)
-        saveLocalDiagramSnapshot(def.id, def, full.elements, full.relations)
-        setPendingQueueCount(getOfflineQueue(def.id).length)
-        setSavingStatus('Guardado')
+        if (!pendingQueue.length) saveLocalDiagramSnapshot(def.id, full.diagram, full.elements, full.relations)
+        else saveLocalDiagramSnapshot(def.id, full.diagram, displayElements, displayRelations)
+        setPendingQueueCount(pendingQueue.length)
+        setSavingStatus(pendingQueue.some(action => action.requiresReview)
+          ? 'Conflicto de concurrencia: se restauraron cambios locales pendientes de revisión.'
+          : pendingQueue.length ? `${pendingQueue.length} cambio(s) local(es) pendientes` : 'Guardado')
 
-        if (navigator.onLine && getOfflineQueue(def.id).length > 0) {
+        if (navigator.onLine && pendingQueue.length > 0) {
           flushPendingQueue(def.id)
         }
       } catch (err) {
@@ -1084,7 +1256,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     return () => {
       isMounted = false
     }
-  }, [project.id, auth.token])
+  }, [project.id, auth.token, acceptServerRevision])
 
   const [wsConnected, setWsConnected] = useState(false)
 
@@ -1122,6 +1294,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
                 `/api/projects/${project.id}/diagrams/${currentDiagramId}`,
                 auth.token
               )
+              if (!acceptServerRevision(currentDiagramId, full.diagram.revision)) return
               saveServerDiagramSnapshot(currentDiagramId, full)
               setDiagram(full.diagram)
               setElementsRaw((prev) => {
@@ -1161,7 +1334,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       isDestroyed = true
       if (ws) ws.close()
     }
-  }, [diagram?.id, project.id, auth.token, isOnline])
+  }, [diagram?.id, project.id, auth.token, isOnline, acceptServerRevision])
 
   // Caso de Uso 8: Sincronización continua reactiva (cada 1.5s <= 2s solo si online)
   useEffect(() => {
@@ -1174,7 +1347,9 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${diagram.id}`,
           auth.token
         )
+        if (!acceptServerRevision(diagram.id, full.diagram.revision)) return
         saveServerDiagramSnapshot(diagram.id, full)
+        setDiagram(full.diagram)
         setElementsRaw((prev) => {
           const prevStr = JSON.stringify(prev)
           const nextStr = JSON.stringify(full.elements)
@@ -1191,7 +1366,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [diagram?.id, project.id, auth.token, isOnline])
+  }, [diagram?.id, project.id, auth.token, isOnline, acceptServerRevision])
 
   // Sincronizar nodos locales cuando cambian elementsRaw sin perder selección
   useEffect(() => {
@@ -1270,10 +1445,11 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         const upd = posMap.get(e.id)
         return upd ? { ...e, posicionX: upd.posicionX, posicionY: upd.posicionY } : e
       })
+      elementsRef.current = nextElements
+      setElementsRaw(nextElements)
+      saveLocalDiagramSnapshot(currentDiagram.id, currentDiagram, nextElements, relationsRef.current)
 
       if (!navigator.onLine || getOfflineQueue(currentDiagram.id).length > 0) {
-        setElementsRaw(nextElements)
-        saveLocalDiagramSnapshot(currentDiagram.id, currentDiagram, nextElements, relationsRaw)
         const count = appendOfflineQueue(
           currentDiagram.id,
           {
@@ -1289,40 +1465,45 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
       try {
         setSavingStatus('Sincronizando...')
-        const headers: Record<string, string> =
-          currentDiagram.revision != null ? { 'X-Diagram-Revision': String(currentDiagram.revision) } : {}
-        await request(
+        const expectedRevision = diagramRequestCoordinator.revision(currentDiagram.id) ?? currentDiagram.revision
+        const response = await requestFull(
           `/api/projects/${project.id}/diagrams/${currentDiagram.id}/elements/positions`,
           auth.token,
           {
             method: 'POST',
-            headers,
-            body: JSON.stringify({ positions, expectedRevision: currentDiagram.revision })
+            headers: expectedRevision != null ? { 'X-Diagram-Revision': String(expectedRevision) } : {},
+            body: JSON.stringify({ positions, expectedRevision })
           }
         )
-        setElementsRaw(nextElements)
-        if (currentDiagram.revision != null) {
-          setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-        }
-        saveLocalDiagramSnapshot(currentDiagram.id, currentDiagram, nextElements, relationsRaw)
-        setSavingStatus('Guardado')
+        applyConfirmedDiagramRevision(currentDiagram.id)
+        saveLocalDiagramSnapshot(currentDiagram.id, diagramRef.current ?? currentDiagram, elementsRef.current, relationsRef.current)
+        setSavingStatus(response.revision == null ? 'Guardado; revisión confirmada en cola' : 'Guardado')
       } catch (err) {
         if (err instanceof ApiRequestError && err.status === 409) {
           const full = await request<DiagramFullView>(
             `/api/projects/${project.id}/diagrams/${currentDiagram.id}`,
             auth.token
           ).catch(() => null)
-          if (full) {
+          const count = appendOfflineQueue(
+            currentDiagram.id,
+            { type: 'SAVE_POSITIONS', payload: { positions } },
+            full?.diagram.revision ?? diagramRequestCoordinator.revision(currentDiagram.id) ?? currentDiagram.revision,
+            true
+          )
+          if (full && acceptServerRevision(currentDiagram.id, full.diagram.revision)) {
             setDiagram(full.diagram)
-            setElementsRaw(full.elements)
+            const mergedElements = mergePendingPositions(full.elements, getOfflineQueue(currentDiagram.id))
+            elementsRef.current = mergedElements
+            setElementsRaw(mergedElements)
             setRelationsRaw(full.relations)
+            relationsRef.current = full.relations
             saveServerDiagramSnapshot(currentDiagram.id, full)
+            saveLocalDiagramSnapshot(currentDiagram.id, full.diagram, mergedElements, full.relations)
           }
-          setSavingStatus('Conflicto de concurrencia al mover posiciones (HTTP 409).')
+          setPendingQueueCount(count)
+          setSavingStatus('Conflicto de concurrencia al mover posiciones (HTTP 409). Se conservó el movimiento local; revísalo y confirma el reintento.')
           return
         }
-        setElementsRaw(nextElements)
-        saveLocalDiagramSnapshot(currentDiagram.id, currentDiagram, nextElements, relationsRaw)
         const count = appendOfflineQueue(
           currentDiagram.id,
           {
@@ -1335,7 +1516,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         setSavingStatus('Guardado localmente (Offline)')
       }
     },
-    [isReadOnly, project.id, auth.token, relationsRaw]
+    [isReadOnly, project.id, auth.token, applyConfirmedDiagramRevision, acceptServerRevision]
   )
 
   // Crear nuevo elemento en el centro (con soporte Offline CU10)
@@ -1401,9 +1582,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       )
       const nextElements = [...elementsRaw, saved]
       setElementsRaw(nextElements)
-      if (diagram.revision != null) {
-        setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-      }
+      applyConfirmedDiagramRevision(diagram.id)
       saveLocalDiagramSnapshot(diagram.id, diagram, nextElements, relationsRaw)
       setSavingStatus('Guardado')
     } catch (err) {
@@ -1412,7 +1591,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${diagram.id}`,
           auth.token
         ).catch(() => null)
-        if (full) {
+        if (full && acceptServerRevision(diagram.id, full.diagram.revision)) {
           setDiagram(full.diagram)
           setElementsRaw(full.elements)
           setRelationsRaw(full.relations)
@@ -1487,9 +1666,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       )
       const updatedElements = elementsRaw.map((e) => (e.id === saved.id ? saved : e))
       setElementsRaw(updatedElements)
-      if (diagram.revision != null) {
-        setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-      }
+      applyConfirmedDiagramRevision(diagram.id)
       saveLocalDiagramSnapshot(diagram.id, diagram, updatedElements, relationsRaw)
       setEditingElement(null)
       setSavingStatus('Guardado')
@@ -1499,7 +1676,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${diagram.id}`,
           auth.token
         ).catch(() => null)
-        if (full) {
+        if (full && acceptServerRevision(diagram.id, full.diagram.revision)) {
           setDiagram(full.diagram)
           setElementsRaw(full.elements)
           setRelationsRaw(full.relations)
@@ -1630,9 +1807,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       const nextRels = [...relationsRaw, saved]
       rememberRelationHandles(saved.id, pendingConnection)
       setRelationsRaw(nextRels)
-      if (diagram.revision != null) {
-        setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-      }
+      applyConfirmedDiagramRevision(diagram.id)
       saveLocalDiagramSnapshot(diagram.id, diagram, elementsRaw, nextRels)
       setPendingConnection(null)
       setSavingStatus('Guardado')
@@ -1642,7 +1817,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${diagram.id}`,
           auth.token
         ).catch(() => null)
-        if (full) {
+        if (full && acceptServerRevision(diagram.id, full.diagram.revision)) {
           setDiagram(full.diagram)
           setElementsRaw(full.elements)
           setRelationsRaw(full.relations)
@@ -1741,9 +1916,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
 
       const updatedRels = relationsRaw.map((r) => (r.id === saved.id ? saved : r))
       setRelationsRaw(updatedRels)
-      if (diagram.revision != null) {
-        setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-      }
+      applyConfirmedDiagramRevision(diagram.id)
       saveLocalDiagramSnapshot(diagram.id, diagram, elementsRaw, updatedRels)
       setEditingRelation(null)
       setSavingStatus('Guardado')
@@ -1753,7 +1926,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${diagram.id}`,
           auth.token
         ).catch(() => null)
-        if (full) {
+        if (full && acceptServerRevision(diagram.id, full.diagram.revision)) {
           setDiagram(full.diagram)
           setElementsRaw(full.elements)
           setRelationsRaw(full.relations)
@@ -1814,9 +1987,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         }
       )
       setRelationsRaw(nextRels)
-      if (diagram.revision != null) {
-        setDiagram((prev) => (prev ? { ...prev, revision: (prev.revision ?? 0) + 1 } : prev))
-      }
+      applyConfirmedDiagramRevision(diagram.id)
       saveLocalDiagramSnapshot(diagram.id, diagram, elementsRaw, nextRels)
       setEditingRelation(null)
       setSavingStatus('Guardado')
@@ -1826,7 +1997,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           `/api/projects/${project.id}/diagrams/${diagram.id}`,
           auth.token
         ).catch(() => null)
-        if (full) {
+        if (full && acceptServerRevision(diagram.id, full.diagram.revision)) {
           setDiagram(full.diagram)
           setElementsRaw(full.elements)
           setRelationsRaw(full.relations)
@@ -1940,6 +2111,11 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   const handleFlowNodesChange = useCallback((changes: NodeChange<UmlNodeType>[]) => {
     if (!historicalView) {
       onNodesChange(changes)
+      if (changes.some(change => change.type === 'position' && change.dragging)) {
+        setEdges(current => current.some(edge => edge.type === 'umlRouted')
+          ? current.map(edge => edge.type === 'umlRouted' ? { ...edge, type: edge.data?.tipoRelacion === 'AGREGACION' || edge.data?.tipoRelacion === 'COMPOSICION' ? 'umlOrthogonal' : 'step', data: { ...(edge.data || {}), routePoints: null, routeLabelPoint: null } } : edge)
+          : current)
+      }
       return
     }
     // En modo histórico solo aceptamos mediciones de React Flow para renderizar nodos y aristas.
@@ -1954,7 +2130,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       })
       onNodesChange(dimensions)
     }
-  }, [historicalView, onNodesChange])
+  }, [historicalView, onNodesChange, setEdges])
 
   async function returnToCurrentVersion() {
     if (!diagram) return
@@ -1985,6 +2161,69 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     const ids = affectedPreviewNodeIds(canvasProposal.active, previewGraph.nodes, previewGraph.edges)
     if (ids.length) void flowInstance.current?.fitView({ nodes: ids.map(id => ({ id })), padding: 0.4, maxZoom: 1.2, duration: 350 })
   }
+  const handleArrangeDiagram = useCallback(async () => {
+    if (isReadOnly || diagram?.bloqueado || historicalView || canvasProposal.active || arrangingDiagram || !diagram) return
+    const liveNodes = flowInstance.current?.getNodes() ?? nodesRef.current
+    if (liveNodes.length < 2) return
+    const layoutNodes = liveNodes.map(node => ({
+      id: node.id,
+      x: node.position.x,
+      y: node.position.y,
+      width: node.measured?.width ?? node.width ?? node.initialWidth ?? 240,
+      height: node.measured?.height ?? node.height ?? node.initialHeight ?? estimateUmlNodeHeight(node.data.propertiesJson)
+    }))
+    const layoutEdges = edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, label: typeof edge.label === 'string' ? edge.label : '', type: (edge.data as { tipoRelacion?: string } | undefined)?.tipoRelacion }))
+    const initialLayout = layoutUmlGraph(layoutNodes, layoutEdges)
+    const rotatedCandidates = [0, 1, 2, 3].map(turn => {
+      const transformed = initialLayout.map(position => {
+        const node = layoutNodes.find(candidate => candidate.id === position.id)!
+        const cx = position.x + node.width / 2, cy = position.y + node.height / 2
+        const point = turn === 0 ? { x: cx, y: cy } : turn === 1 ? { x: -cy, y: cx } : turn === 2 ? { x: -cx, y: -cy } : { x: cy, y: -cx }
+        return { id: position.id, x: point.x - node.width / 2, y: point.y - node.height / 2 }
+      })
+      const minX = Math.min(...transformed.map(position => position.x)), minY = Math.min(...transformed.map(position => position.y))
+      return transformed.map(position => ({ ...position, x: position.x - minX + 80, y: position.y - minY + 80 }))
+    })
+    const arranged = scoreUmlCandidates(layoutNodes, layoutEdges, rotatedCandidates)[0]?.positions ?? initialLayout
+    const positions = new Map(arranged.map(position => [position.id, { x: position.x, y: position.y }]))
+    const nextNodes = liveNodes.map(node => {
+      const position = positions.get(node.id)
+      return position ? { ...node, position } : node
+    })
+    const movedNodes = nextNodes.filter(node => {
+      const previous = liveNodes.find(current => current.id === node.id)
+      return previous && (Math.abs(previous.position.x - node.position.x) > 0.5 || Math.abs(previous.position.y - node.position.y) > 0.5)
+    })
+    if (!movedNodes.length) return
+
+    const routeNodes = nextNodes.map(node => ({ id: node.id, x: node.position.x, y: node.position.y, width: node.measured?.width ?? node.width ?? 240, height: node.measured?.height ?? node.height ?? 120 }))
+    const routeResults = routeUmlEdges(routeNodes, edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, label: typeof edge.label === 'string' ? edge.label : '' })))
+    const routeById = new Map(routeResults.map(route => [route.id, route.points]))
+    // Exact same orthogonal paths are used in the rendered edge, rather than center-line estimates.
+    const routedMetrics = measureRoutedLayout(routeNodes, routeResults)
+    if (routedMetrics.nodeOverlaps > 0 || routedMetrics.edgeThroughNodes > 0) console.warn('CU22 routing metrics', routedMetrics)
+
+    setArrangingDiagram(true)
+    setSavingStatus('Organizando diagrama...')
+    setNodes(current => current.map(node => {
+      const position = positions.get(node.id)
+      return position ? { ...node, position } : node
+    }))
+    try {
+      await handleNodeDragStop(null, movedNodes[0], movedNodes)
+      setEdges(current => current.map(edge => {
+        const route = routeResults.find(item => item.id === edge.id)
+        return { ...edge, type: 'umlRouted', data: { ...(edge.data || {}), routePoints: routeById.get(edge.id) ?? null, routeLabelPoint: route?.labelPoint ?? null } }
+      }))
+      window.setTimeout(() => {
+        void flowInstance.current?.fitView({ nodes: nextNodes.map(node => ({ id: node.id })), padding: 0.24, maxZoom: 1.05, duration: 320 })
+      }, 120)
+    } catch (error) {
+      onError(error)
+    } finally {
+      setArrangingDiagram(false)
+    }
+  }, [isReadOnly, historicalView, canvasProposal.active, arrangingDiagram, diagram, edges, handleNodeDragStop, setNodes, setEdges, onError])
   const selectedNodeId = nodes.find((node) => node.selected)?.id
   const selectedEdgeId = edges.find((edge) => edge.selected)?.id
   const selectedElement = selectedNodeId ? elementsRaw.find((element) => element.id === selectedNodeId) ?? null : null
@@ -2037,6 +2276,8 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       onAi={(mode) => { setAiInitialMode(mode || 'command'); setShowAi(true) }} onGenerator={() => setShowGenerator(true)} onVersions={() => setShowVersions(true)}
       onExchange={() => setShowXmi(true)} onApiTester={() => setShowApiTester(true)} onDeleteSelected={handleDeleteSelected}
       onCreateIntermediateClass={handleCreateIntermediateClass}
+      onArrangeDiagram={() => void handleArrangeDiagram()} arrangingDiagram={arrangingDiagram} arrangeDisabled={Boolean(historicalView || canvasProposal.active)}
+      onRetryPendingSync={() => void handleRetryPendingSync()}
       selectedCount={selectedCount} onSelectAll={() => setNodes(prev => prev.map(node => ({ ...node, selected: true })))}
       onDeselectAll={() => setNodes(prev => prev.map(node => ({ ...node, selected: false })))}
     >

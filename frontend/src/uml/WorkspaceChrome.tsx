@@ -43,6 +43,8 @@ type Props = {
   onValidate: () => void; onRelational: () => void; onAi: (initialMode?: 'command' | 'image' | 'chat') => void; onGenerator: () => void
   onVersions: () => void; onExchange: () => void; onApiTester: () => void; onDeleteSelected: () => void
   onCreateIntermediateClass: (relation: RelationDetail) => void
+  onArrangeDiagram: () => void; arrangingDiagram: boolean; arrangeDisabled: boolean
+  onRetryPendingSync: () => void
   selectedCount: number; onSelectAll: () => void; onDeselectAll: () => void
   children: ReactNode
 }
@@ -293,6 +295,24 @@ function WorkspaceChromeContent(p: Props) {
                 ) : (
                   <button className="quiet-button" onClick={p.onSelectAll}>Seleccionar todo</button>
                 )}
+                <button
+                  type="button"
+                  className="quiet-button organize-diagram-button"
+                  disabled={isEditingDisabled || p.arrangingDiagram || p.arrangeDisabled || p.elements.length < 2}
+                  onClick={p.onArrangeDiagram}
+                  title="Organizar diagrama"
+                  aria-label="Organizar diagrama"
+                >
+                  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="6" height="6" rx="1" />
+                    <rect x="2" y="3" width="5" height="5" rx="1" />
+                    <rect x="17" y="3" width="5" height="5" rx="1" />
+                    <rect x="2" y="16" width="5" height="5" rx="1" />
+                    <rect x="17" y="16" width="5" height="5" rx="1" />
+                    <path d="M7 6h2m6 0h2M4.5 8v5m15-5v5M7 18.5h2m6 0h2" />
+                  </svg>
+                  <span>{p.arrangingDiagram ? 'Organizando…' : 'Organizar'}</span>
+                </button>
                 {isRightPanelCollapsed && (
                   <button
                     className="quiet-button open-panel-btn"
@@ -326,7 +346,7 @@ function WorkspaceChromeContent(p: Props) {
 
           <>
               <div
-                className={`panel-resizer ${isResizingRight ? 'dragging' : ''}`}
+                className={`panel-resizer right-panel-resizer ${isResizingRight ? 'dragging' : ''}`}
                 style={{ display: isRightPanelCollapsed ? 'none' : undefined }}
                 onMouseDown={() => setIsResizingRight(true)}
                 title="Arrastrar para ajustar ancho del panel derecho"
@@ -448,6 +468,11 @@ function WorkspaceChromeContent(p: Props) {
       <span>{p.members.length} colaboradores</span>
       <span>Diagrama: {p.diagram?.estado ?? 'Cargando'}</span>
       <span className="footer-last">{p.queueCount ? `${p.queueCount} cambios locales pendientes` : p.savingStatus}</span>
+      {p.online && !p.syncing && p.queueCount > 0 && p.savingStatus.includes('Conflicto') && (
+        <button type="button" className="footer-retry-sync" onClick={p.onRetryPendingSync} title="Revisar los cambios locales y confirmar su reintento con la revisión actual del servidor">
+          Revisar y reintentar
+        </button>
+      )}
     </footer>
   </div>
 }
