@@ -40,8 +40,10 @@ type Props = {
   onBack?: () => void; onManageMembers?: () => void; onCreate: (type: TipoElementoUML) => void
   onImageUpload: (file: File) => void
   onEditElement: (id: string) => void; onEditRelation: (relation: RelationDetail) => void; onRelationType: (type: TipoRelacionUML) => void
-  onValidate: () => void; onRelational: () => void; onAi: (initialMode?: 'command' | 'image' | 'chat') => void; onGenerator: () => void
-  onVersions: () => void; onExchange: () => void; onApiTester: () => void; onDeleteSelected: () => void
+  onValidate: () => void; onRelational: () => void; onAi: (initialMode?: 'command' | 'image' | 'chat') => void; onGenerator: () => Promise<void>; onFlutterGenerator: () => void
+  onVersions: () => void; onActivity: () => void; onComments: () => void; commentMode: boolean
+  selectedCommentId: string | null; onEditSelectedComment: () => void; onDeleteSelectedComment: () => void
+  onExchange: () => void; onApiTester: () => void; onDeleteSelected: () => void
   onCreateIntermediateClass: (relation: RelationDetail) => void
   onArrangeDiagram: () => void; arrangingDiagram: boolean; arrangeDisabled: boolean
   onRetryPendingSync: () => void
@@ -54,11 +56,28 @@ export function WorkspaceChrome(p: Props) {
 }
 
 function WorkspaceChromeContent(p: Props) {
+  const [generationNotice, setGenerationNotice] = useState<string | null>(null)
   const [activeTool, setActiveTool] = useState('Selección')
   const [modelingMode, setModelingMode] = useState<'manual' | 'image' | 'voice'>('manual')
   const [relationType, setRelationType] = useState<TipoRelacionUML>('ASOCIACION')
   const [imageName, setImageName] = useState('')
+  const [commentActionsOpen, setCommentActionsOpen] = useState(false)
   const imageInput = useRef<HTMLInputElement>(null)
+
+  async function openGeneration(kind: 'backend' | 'flutter') {
+    if (kind === 'flutter') {
+      p.onFlutterGenerator()
+      return
+    }
+    try {
+      await p.onGenerator()
+      setGenerationNotice('✅ Backend Spring Boot creado con éxito.')
+      window.setTimeout(() => setGenerationNotice(null), 4500)
+    } catch {
+      setGenerationNotice('❌ No se pudo crear el Backend Spring Boot.')
+      window.setTimeout(() => setGenerationNotice(null), 4500)
+    }
+  }
 
   // Estado para paneles redimensionables (Lienzo dinámico)
   const [sidebarWidth, setSidebarWidth] = useState(210)
@@ -103,6 +122,11 @@ function WorkspaceChromeContent(p: Props) {
   }, [isResizingLeft, isResizingRight])
 
   return <div className={`workspace-shell ${isResizingLeft || isResizingRight ? 'is-resizing' : ''}`}>
+    {generationNotice && (
+      <div role="status" aria-live="polite" style={{ position: 'fixed', top: '1rem', left: '50%', transform: 'translateX(-50%)', zIndex: 100, padding: '0.8rem 1.1rem', borderRadius: '8px', background: '#eff6ff', border: '1px solid #93c5fd', color: '#1e3a8a', boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)', fontWeight: 600 }}>
+        ℹ️ {generationNotice}
+      </div>
+    )}
     <header className="workspace-topbar">
       <div className="workspace-brand">
         <button className="chrome-back" onClick={p.onBack} title="Volver a proyectos">
@@ -230,6 +254,40 @@ function WorkspaceChromeContent(p: Props) {
               <span className="eyebrow">MODELADO MANUAL</span>
               <strong>Herramientas</strong>
             </div>
+            <details className="tool-module" open>
+              <summary>Colaboración</summary>
+              <div className="tool-module-content">
+                <button type="button" className={`tool-item ${p.commentMode ? 'selected' : ''}`} title="Activa el modo para crear una nota en cualquier punto del lienzo" onClick={p.onComments}>{p.commentMode ? 'Cancelar creación' : 'Crear comentario'}</button>
+                {p.selectedCommentId && <button type="button" className={`tool-item ${commentActionsOpen ? 'selected' : ''}`} title="Opciones para el comentario seleccionado" onClick={() => setCommentActionsOpen(open => !open)}>Opciones del comentario</button>}
+                {commentActionsOpen && p.selectedCommentId && <div className="comment-tool-actions" role="group" aria-label="Acciones del comentario seleccionado">
+                  <button type="button" onClick={() => { p.onEditSelectedComment(); setCommentActionsOpen(false) }}>Editar comentario</button>
+                  <button type="button" onClick={() => { p.onDeleteSelectedComment(); setCommentActionsOpen(false) }}>Eliminar comentario</button>
+                </div>}
+              </div>
+            </details>
+            <details className="tool-module generation-module" open>
+              <summary>Generación de software</summary>
+              <div className="tool-module-content">
+                <button
+                  type="button"
+                  className="tool-item generation-tool-item"
+                  title="Configurar y generar un backend Spring Boot desde el diagrama UML"
+                  onClick={() => void openGeneration('backend')}
+                >
+                  <CodeIcon size={15} />
+                  <span>Generar Backend Spring Boot</span>
+                </button>
+                <button
+                  type="button"
+                  className="tool-item generation-tool-item"
+                  title="Generar el frontend Flutter contextualizado y registro por voz"
+                  onClick={() => openGeneration('flutter')}
+                >
+                  <span>Generar Backend + Flutter</span>
+                </button>
+                <small className="tool-help-text">Configura el proyecto, previsualiza los archivos y descarga el ZIP.</small>
+              </div>
+            </details>
             <details className="tool-module">
               <summary>Modos de modelado</summary>
               <div className="tool-module-content mode-module-content">
@@ -328,8 +386,10 @@ function WorkspaceChromeContent(p: Props) {
                     <button onClick={p.onValidate}>Validar modelo</button>
                     <button onClick={p.onRelational}>Relacional y SQL</button>
                     <button onClick={() => p.onAi('command')}>Asistente de modelado</button>
-                    <button onClick={p.onGenerator}>Generar software</button>
+                    <button onClick={() => void openGeneration('backend')}>Generar software</button>
                     <button onClick={p.onVersions}>Versiones</button>
+                    <button onClick={p.onActivity}>Bitácora de actividad</button>
+                    <button onClick={p.onComments}>Comentarios UML</button>
                     <button onClick={p.onExchange}>Enterprise Architect / XMI</button>
                     <button onClick={p.onApiTester}>Probar API</button>
                   </div>
@@ -340,6 +400,7 @@ function WorkspaceChromeContent(p: Props) {
               <div className="canvas-hint">
                 {activeTool === 'Crear relación' ? `RELACIÓN · ${relationType.toLowerCase()} · conecta dos elementos` : 'SELECCIÓN · arrastra para mover · rueda para zoom'}
               </div>
+              {p.commentMode && <div className="canvas-hint" style={{ background: '#fef3c7', color: '#92400e' }}>MODO COMENTARIO · haz clic en cualquier punto del lienzo para escribir una observación</div>}
               <div className="canvas-mount">{p.children}</div>
             </div>
           </main>

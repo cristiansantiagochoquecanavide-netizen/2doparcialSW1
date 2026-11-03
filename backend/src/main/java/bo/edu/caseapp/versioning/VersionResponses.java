@@ -34,4 +34,15 @@ public final class VersionResponses {
       UUID restoredFromVersionId,
       boolean working
   ) {}
+
+  public record ActivityItem(
+      UUID versionId,
+      int numeroVersion,
+      String autorNombre,
+      String autorEmail,
+      Instant fecha,
+      long revision,
+      String operacion,
+      java.util.List<String> elementosAfectados
+  ) {}
 }

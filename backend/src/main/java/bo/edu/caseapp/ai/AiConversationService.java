@@ -23,6 +23,7 @@ public class AiConversationService {
   @org.springframework.beans.factory.annotation.Autowired private AiMemoryService sharedMemory;
   @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.chat.AcodiDeletionClarification deletions;
   @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.versioning.VersionComparisonService versionComparisons;
+  @org.springframework.beans.factory.annotation.Autowired private bo.edu.caseapp.versioning.VersionService versions;
 
   public AiConversationService(AiConversationStore store, AiOrchestrationService orchestration,
       @Value("${app.ai.max-output-tokens.conversation:300}") int maxOutputTokens) {
@@ -68,6 +69,12 @@ public class AiConversationService {
           return store.completeQuestion(projectId, conversation.id(), question.id(), email,
               question.senderName()+", "+comparison.clarification(), 0, 0, 0L);
         if (comparison.requested()) comparisonContext = comparison.context();
+      }
+      String activityContext = null;
+      if (versions != null && (local.contains("actividad") || local.contains("bitacora")
+          || local.contains("quien hizo") || local.contains("historial de cambios")
+          || local.contains("modificacion"))) {
+        activityContext = versions.activityContext(projectId, conversation.diagramId(), email);
       }
       if(local.matches("(?:ver |mostrar )?(contexto|memoria)(?: del proyecto)?[.!? ]*")) {
         var view=sharedMemory.get(projectId,conversation.diagramId(),email);var m=view.projectMemory();
@@ -124,6 +131,7 @@ public class AiConversationService {
           + "Con cero, una o dos clases, evita conclusiones firmes; con dos o tres, formula cualquier lectura del dominio como hipótesis y pide confirmación. "
           + "No modifiques ni afirmes haber modificado el diagrama; presenta las acciones como sugerencias.";
       if (comparisonContext != null) system += " Analiza los cambios, riesgos, errores y recomendaciones basándote en esta comparación determinista autorizada. No modifiques ni restaures versiones.\n" + comparisonContext;
+      if (activityContext != null) system += " Usa esta bitácora autorizada para responder sobre autores, fechas y elementos afectados; no inventes datos.\\n" + activityContext;
       LlmResponse response = orchestration.generate(email, projectId, conversation.diagramId(), operation,
           system, messages, maxOutputTokens, 0.3);
       long latency = (System.nanoTime() - startedAt) / 1_000_000;

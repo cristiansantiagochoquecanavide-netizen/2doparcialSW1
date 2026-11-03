@@ -4,6 +4,7 @@ import bo.edu.caseapp.uml.UmlResponses.DiagramFullView;
 import bo.edu.caseapp.versioning.VersionRequests.CreateVersion;
 import bo.edu.caseapp.versioning.VersionResponses.VersionSummary;
 import bo.edu.caseapp.versioning.VersionResponses.VersionDetail;
+import bo.edu.caseapp.versioning.VersionResponses.ActivityItem;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
@@ -46,6 +47,12 @@ public class VersionController {
   public VersionDetail getAtNumber(@PathVariable UUID projectId, @PathVariable UUID diagramId,
       @PathVariable int number, Authentication auth) {
     return versionService.getVersionAtNumber(projectId, diagramId, number, auth.getName());
+  }
+
+  @GetMapping("/activity")
+  public List<ActivityItem> activity(@PathVariable UUID projectId, @PathVariable UUID diagramId,
+      Authentication auth) {
+    return versionService.activity(projectId, diagramId, auth.getName());
   }
 
   @PostMapping

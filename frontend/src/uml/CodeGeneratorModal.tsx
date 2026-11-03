@@ -11,6 +11,7 @@ type GenerationPreview = {
   basePackage: string
   totalBackendFiles: number
   totalFrontendFiles: number
+  totalFlutterFiles: number
   files: GeneratedFile[]
 }
 
@@ -19,6 +20,8 @@ type Props = {
   diagramId: string
   projectId: string
   token: string
+  initialFlutter?: boolean
+  simplifiedBackend?: boolean
   onClose: () => void
   onError: (err: unknown) => void
 }
@@ -28,6 +31,8 @@ export function CodeGeneratorModal({
   diagramId,
   projectId,
   token,
+  initialFlutter = false,
+  simplifiedBackend = false,
   onClose,
   onError
 }: Props) {
@@ -37,19 +42,23 @@ export function CodeGeneratorModal({
   )
   const [serverPort, setServerPort] = useState(8081)
   const [databaseName, setDatabaseName] = useState('app_db')
-  const [includeFrontend, setIncludeFrontend] = useState(true)
+  // El flujo Flutter genera backend + Flutter; React solo se incluye si se activa manualmente.
+  const [includeFrontend, setIncludeFrontend] = useState(false)
+  const [includeFlutter, setIncludeFlutter] = useState(initialFlutter)
 
   const [loading, setLoading] = useState(false)
   const [preview, setPreview] = useState<GenerationPreview | null>(null)
   const [selectedFile, setSelectedFile] = useState<GeneratedFile | null>(null)
   const [copied, setCopied] = useState(false)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
   const configPayload = {
     packageName,
     projectName: targetProjectName,
     serverPort,
     databaseName,
-    includeFrontend
+    includeFrontend,
+    includeFlutter
   }
 
   // Previsualizar código generado
@@ -73,6 +82,13 @@ export function CodeGeneratorModal({
       if (data.files.length > 0) {
         setSelectedFile(data.files[0])
       }
+      setSuccessMessage(
+        includeFlutter
+          ? '¡Backend Spring Boot y frontend Flutter generados correctamente!'
+          : includeFrontend
+            ? '¡Backend Spring Boot y frontend React generados correctamente!'
+            : '¡Backend Spring Boot generado correctamente!'
+      )
     } catch (err) {
       onError(err)
     } finally {
@@ -129,10 +145,26 @@ export function CodeGeneratorModal({
         </div>
 
         <div className="generator-body">
+          {successMessage && (
+            <div
+              role="status"
+              style={{
+                marginBottom: '1rem',
+                padding: '0.85rem 1rem',
+                borderRadius: '8px',
+                border: '1px solid #86efac',
+                background: '#f0fdf4',
+                color: '#166534',
+                fontWeight: 600
+              }}
+            >
+              ✅ {successMessage}
+            </div>
+          )}
           {/* Formulario de opciones */}
           <div className="generator-config-card">
             <h4>Configuración del Proyecto</h4>
-            <div className="config-grid">
+            <div className="config-grid" style={{ display: simplifiedBackend ? 'none' : undefined }}>
               <label>
                 Nombre del Proyecto:
                 <input
@@ -173,7 +205,7 @@ export function CodeGeneratorModal({
               </label>
             </div>
 
-            <div className="checkbox-row" style={{ marginTop: '0.8rem' }}>
+            <div className="checkbox-row" style={{ marginTop: '0.8rem', display: simplifiedBackend ? 'none' : undefined }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                 <input
                   type="checkbox"
@@ -181,6 +213,17 @@ export function CodeGeneratorModal({
                   onChange={(e) => setIncludeFrontend(e.target.checked)}
                 />
                 <strong>Generar Frontend React + TypeScript adaptado al backend</strong>
+              </label>
+            </div>
+
+            <div className="checkbox-row" style={{ marginTop: '0.8rem', display: simplifiedBackend ? 'none' : undefined }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={includeFlutter}
+                  onChange={(e) => setIncludeFlutter(e.target.checked)}
+                />
+                <strong>Generar Frontend Flutter contextualizado, voz y script para APK</strong>
               </label>
             </div>
 
@@ -218,6 +261,11 @@ export function CodeGeneratorModal({
                   {preview.totalFrontendFiles > 0 && (
                     <span className="badge" style={{ background: '#0284c7' }}>
                       ⚛️ Frontend: {preview.totalFrontendFiles} archivos
+                    </span>
+                  )}
+                  {preview.totalFlutterFiles > 0 && (
+                    <span className="badge" style={{ background: '#0f766e', marginLeft: '0.5rem' }}>
+                      Flutter: {preview.totalFlutterFiles} archivos
                     </span>
                   )}
                 </div>

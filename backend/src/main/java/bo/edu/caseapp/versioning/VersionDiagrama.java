@@ -85,5 +85,6 @@ public class VersionDiagrama {
     if (!working) throw new IllegalStateException("No se puede modificar una versión cerrada.");
     this.snapshotJson = snapshotJson;
     this.sourceRevision = sourceRevision;
+    this.fecha = Instant.now();
   }
 }

@@ -10,7 +10,8 @@ public final class GeneratorRequests {
       String databaseName,
       String databaseUser,
       String databasePassword,
-      Boolean includeFrontend
+      Boolean includeFrontend,
+      Boolean includeFlutter
   ) {
     public String resolvedPackage() {
       return packageName != null && !packageName.isBlank() ? packageName.trim() : "bo.edu.generated";
@@ -38,6 +39,10 @@ public final class GeneratorRequests {
 
     public boolean resolvedIncludeFrontend() {
       return includeFrontend == null || includeFrontend;
+    }
+
+    public boolean resolvedIncludeFlutter() {
+      return includeFlutter != null && includeFlutter;
     }
   }
 }

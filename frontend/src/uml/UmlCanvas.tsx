@@ -17,6 +17,7 @@ import {
   BaseEdge,
   StepEdge,
   EdgeLabelRenderer,
+  ViewportPortal,
   type EdgeProps,
   type ReactFlowInstance
 } from '@xyflow/react'
@@ -42,6 +43,7 @@ import { RelationalModal } from './RelationalModal'
 import { CodeGeneratorModal } from './CodeGeneratorModal'
 import { AiAssistantModal } from './AiAssistantModal'
 import { VersionHistoryModal, type VersionSummary } from './VersionHistoryModal'
+import { ActivityLogModal } from './ActivityLogModal'
 import { compareVersions, type VersionChange } from './versionDiff.mjs'
 import { layoutUmlGraph } from './autoLayout.mjs'
 import { measureRoutedLayout, routeUmlEdges, scoreUmlCandidates } from './routeUmlEdges.mjs'
@@ -524,6 +526,8 @@ type Props = {
   onBack?: () => void
 }
 
+type CanvasComment = { id: string; posicionX: number | null; posicionY: number | null; canvasWidth: number; canvasHeight: number; content: string; status: 'OPEN' | 'RESOLVED'; authorName: string }
+
 export function UmlCanvas({ project, auth, onError, members = [], onManageMembers, onBack }: Props) {
   const [historicalView, setHistoricalView] = useState<{ snapshot: DiagramFullView; version: VersionSummary; changes?: VersionChange[]; before?: DiagramFullView; beforeVersion?: VersionSummary } | null>(null)
   const [comparisonVersionIds, setComparisonVersionIds] = useState<string[]>([])
@@ -563,12 +567,101 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   const [generatingRelational, setGeneratingRelational] = useState(false)
 
   const [showGenerator, setShowGenerator] = useState(false)
+  const [generatorWithFlutter, setGeneratorWithFlutter] = useState(false)
   const [showAi, setShowAi] = useState(false)
   const [aiInitialMode, setAiInitialMode] = useState<'command' | 'image' | 'chat'>('command')
   const [imageImportFile, setImageImportFile] = useState<File | null>(null)
   const [showVersions, setShowVersions] = useState(false)
+  const [showActivity, setShowActivity] = useState(false)
+  const [commentMode, setCommentMode] = useState(false)
+  const [draftComment, setDraftComment] = useState<{ x: number; y: number; content: string } | null>(null)
+  const [canvasComments, setCanvasComments] = useState<CanvasComment[]>([])
+  const draggingComment = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null)
+  const resizingComment = useRef<{ id: string; pointerX: number; pointerY: number; width: number; height: number } | null>(null)
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null)
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
+  const [editingCommentText, setEditingCommentText] = useState('')
   const [showXmi, setShowXmi] = useState(false)
   const [showApiTester, setShowApiTester] = useState(false)
+
+  const loadCanvasComments = useCallback(async () => {
+    if (!diagram) return
+    try {
+      const comments = await request<CanvasComment[]>(`/api/projects/${project.id}/diagrams/${diagram.id}/comments`, auth.token)
+      setCanvasComments(comments.filter(comment => comment.posicionX != null && comment.posicionY != null))
+    } catch (error) {
+      onError(error)
+    }
+  }, [auth.token, diagram, onError, project.id])
+
+  useEffect(() => { void loadCanvasComments() }, [loadCanvasComments])
+
+  async function moveCanvasComment(commentId: string, position: { x: number; y: number }) {
+    if (!diagram) return
+    try {
+      await request(`/api/projects/${project.id}/diagrams/${diagram.id}/comments/${commentId}`, auth.token, {
+        method: 'PATCH',
+        body: JSON.stringify({ posicionX: position.x, posicionY: position.y })
+      })
+    } catch (error) {
+      onError(error)
+      void loadCanvasComments()
+    }
+  }
+
+  async function resizeCanvasComment(commentId: string, size: { width: number; height: number }) {
+    if (!diagram) return
+    try {
+      await request(`/api/projects/${project.id}/diagrams/${diagram.id}/comments/${commentId}`, auth.token, {
+        method: 'PATCH',
+        body: JSON.stringify({ canvasWidth: size.width, canvasHeight: size.height })
+      })
+    } catch (error) {
+      onError(error)
+      void loadCanvasComments()
+    }
+  }
+
+  async function deleteCanvasComment(commentId: string) {
+    if (!diagram || !window.confirm('¿Eliminar este comentario del lienzo?')) return
+    try {
+      await request(`/api/projects/${project.id}/diagrams/${diagram.id}/comments/${commentId}`, auth.token, { method: 'DELETE' })
+      setCanvasComments(comments => comments.filter(comment => comment.id !== commentId))
+      setSelectedCommentId(current => current === commentId ? null : current)
+      setEditingCommentId(current => current === commentId ? null : current)
+    } catch (error) {
+      onError(error)
+    }
+  }
+
+  async function updateCanvasComment(commentId: string) {
+    if (!diagram || !editingCommentText.trim()) return
+    try {
+      await request(`/api/projects/${project.id}/diagrams/${diagram.id}/comments/${commentId}`, auth.token, {
+        method: 'PATCH',
+        body: JSON.stringify({ content: editingCommentText.trim() })
+      })
+      setCanvasComments(comments => comments.map(comment => comment.id === commentId ? { ...comment, content: editingCommentText.trim() } : comment))
+      setEditingCommentId(null)
+      setEditingCommentText('')
+    } catch (error) {
+      onError(error)
+    }
+  }
+
+  async function saveDraftComment() {
+    if (!diagram || !draftComment?.content.trim()) return
+    try {
+      await request(`/api/projects/${project.id}/diagrams/${diagram.id}/comments`, auth.token, {
+        method: 'POST',
+        body: JSON.stringify({ content: draftComment.content.trim(), elementoId: null, relacionId: null, parentId: null, posicionX: draftComment.x, posicionY: draftComment.y })
+      })
+      setDraftComment(null)
+      await loadCanvasComments()
+    } catch (error) {
+      onError(error)
+    }
+  }
 
   // Estado y ref para la expansión manual del área de trabajo del lienzo UML
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -1858,7 +1951,23 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   // Clic sobre una relación para editar o eliminar
   function handleEdgeClick(_event: React.MouseEvent, edge: Edge) {
     const rel = relationsRaw.find((r) => r.id === edge.id)
+    if (commentMode && rel) {
+      openCanvasComment(_event)
+      return
+    }
     if (rel) setEditingRelation(rel)
+  }
+
+  function handleNodeClick(_event: React.MouseEvent, node: UmlNodeType) {
+    if (!commentMode) return
+    openCanvasComment(_event)
+  }
+
+  function openCanvasComment(event: React.MouseEvent) {
+    const position = flowInstance.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+    if (!position) return
+    setDraftComment({ x: position.x, y: position.y, content: '' })
+    setCommentMode(false)
   }
 
   // Guardar edición de relación existente (con soporte Offline CU10)
@@ -2261,6 +2370,38 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     }
   }
 
+  async function handleCreateBackendDirect(): Promise<void> {
+    if (!diagram) throw new Error('El diagrama todavía no está disponible.')
+    const generatedName = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'app-generada'
+    const response = await fetch(`/api/projects/${project.id}/diagrams/${diagram.id}/generate/zip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
+      body: JSON.stringify({
+        packageName: 'bo.edu.generated',
+        projectName: generatedName,
+        serverPort: 8081,
+        databaseName: 'app_db',
+        includeFrontend: false,
+        includeFlutter: false
+      })
+    })
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { message?: string }
+      const error = new Error(body.message || 'No se pudo crear el backend.')
+      onError(error)
+      throw error
+    }
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${generatedName}.zip`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  }
+
   return (
     <>
     <WorkspaceChrome
@@ -2273,7 +2414,19 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       onBack={onBack} onManageMembers={onManageMembers} onCreate={handleAddElement} onEditElement={handleEditElement}
       onImageUpload={openImageImport}
       onEditRelation={setEditingRelation} onRelationType={setPendingRelationType} onValidate={handleValidateDiagram} onRelational={handleGenerateRelational}
-      onAi={(mode) => { setAiInitialMode(mode || 'command'); setShowAi(true) }} onGenerator={() => setShowGenerator(true)} onVersions={() => setShowVersions(true)}
+      onAi={(mode) => { setAiInitialMode(mode || 'command'); setShowAi(true) }}
+      onGenerator={handleCreateBackendDirect}
+      onFlutterGenerator={() => { setGeneratorWithFlutter(true); setShowGenerator(true) }}
+      onVersions={() => setShowVersions(true)}
+      onActivity={() => setShowActivity(true)}
+      commentMode={commentMode}
+      onComments={() => setCommentMode(value => !value)}
+      selectedCommentId={selectedCommentId}
+      onEditSelectedComment={() => {
+        const comment = canvasComments.find(item => item.id === selectedCommentId)
+        if (comment) { setEditingCommentId(comment.id); setEditingCommentText(comment.content) }
+      }}
+      onDeleteSelectedComment={() => { if (selectedCommentId) void deleteCanvasComment(selectedCommentId) }}
       onExchange={() => setShowXmi(true)} onApiTester={() => setShowApiTester(true)} onDeleteSelected={handleDeleteSelected}
       onCreateIntermediateClass={handleCreateIntermediateClass}
       onArrangeDiagram={() => void handleArrangeDiagram()} arrangingDiagram={arrangingDiagram} arrangeDisabled={Boolean(historicalView || canvasProposal.active)}
@@ -2352,10 +2505,10 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
             type="button"
             className="uml-tool-btn feature-btn"
             style={{ background: '#16a34a', color: 'white', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-            onClick={() => setShowGenerator(true)}
-            title="Generar Backend Spring Boot y Frontend React en archivo ZIP"
+            onClick={() => void handleCreateBackendDirect()}
+            title="Crear Backend Spring Boot con configuración predeterminada"
           >
-            <CodeIcon size={14} color="white" /> Generar Software
+            <CodeIcon size={14} color="white" /> Generar Backend
           </button>
 
           <button
@@ -2466,6 +2619,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       <div
         ref={viewportRef}
         className={`uml-canvas-viewport ${isResizingCanvas ? 'is-resizing-canvas' : ''} ${canvasProposal.active ? 'acodi-preview-active' : ''} ${historicalView ? 'is-historical-view' : ''}`}
+        onClickCapture={commentMode && !historicalView && !canvasProposal.active ? openCanvasComment : undefined}
         style={
           canvasCustomSize.width && canvasCustomSize.height
             ? {
@@ -2505,7 +2659,9 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           onConnect={historicalView || canvasProposal.active ? undefined : handleConnect}
           onReconnect={historicalView || canvasProposal.active ? undefined : handleReconnect}
           onNodeDragStop={historicalView || canvasProposal.active ? undefined : handleNodeDragStop}
-          onEdgeClick={historicalView || canvasProposal.active ? undefined : handleEdgeClick}
+          onNodeClick={historicalView || canvasProposal.active || commentMode ? undefined : handleNodeClick}
+          onEdgeClick={historicalView || canvasProposal.active || commentMode ? undefined : handleEdgeClick}
+          onPaneClick={undefined}
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
           nodesDraggable={!isReadOnly && !canvasProposal.active}
@@ -2519,6 +2675,112 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           multiSelectionKeyCode={['Control', 'Meta']}
           fitView
         >
+          <ViewportPortal>
+            {draftComment && (
+              <div
+                style={{ position: 'absolute', left: draftComment.x, top: draftComment.y, transform: 'translate(-8px, -8px)', width: 180, minHeight: 90, padding: '12px 12px 10px', border: '2px solid #111827', background: '#ffffff', color: '#172033', zIndex: 30, boxSizing: 'border-box', pointerEvents: 'auto' }}
+                onPointerDown={event => event.stopPropagation()}
+              >
+                <span aria-hidden="true" style={{ position: 'absolute', right: -2, top: -2, width: 17, height: 17, background: '#ffffff', borderLeft: '2px solid #111827', borderBottom: '2px solid #111827', clipPath: 'polygon(0 0, 100% 0, 100% 100%)' }} />
+                <textarea autoFocus value={draftComment.content} onChange={event => setDraftComment(current => current ? { ...current, content: event.target.value } : current)} onPointerDown={event => event.stopPropagation()} placeholder="Escribe aquí el comentario" rows={3} maxLength={2000} style={{ display: 'block', width: '100%', minHeight: 52, boxSizing: 'border-box', resize: 'vertical', border: 0, outline: 0, color: '#172033', background: 'transparent', font: '14px Arial, sans-serif' }} />
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button type="button" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); void saveDraftComment() }} disabled={!draftComment.content.trim()} style={{ padding: '5px 9px', fontSize: 12, lineHeight: 1.2, borderRadius: 4 }}>Guardar</button>
+                  <button type="button" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); setDraftComment(null) }} style={{ padding: '5px 9px', fontSize: 12, lineHeight: 1.2, borderRadius: 4 }}>Cancelar</button>
+                </div>
+              </div>
+            )}
+            {canvasComments.map(comment => (
+              <div
+                key={comment.id}
+                onPointerDown={event => {
+                  event.stopPropagation()
+                  if ((event.target as HTMLElement).closest('button, textarea')) return
+                  const pointer = flowInstance.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                  if (!pointer) return
+                  setSelectedCommentId(comment.id)
+                  draggingComment.current = { id: comment.id, offsetX: pointer.x - (comment.posicionX ?? 0), offsetY: pointer.y - (comment.posicionY ?? 0) }
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                }}
+                onPointerMove={event => {
+                  const resize = resizingComment.current
+                  if (resize?.id === comment.id && flowInstance.current) {
+                    const scale = flowInstance.current.getZoom() || 1
+                    const width = Math.max(120, Math.min(600, Math.round(resize.width + (event.clientX - resize.pointerX) / scale)))
+                    const height = Math.max(70, Math.min(600, Math.round(resize.height + (event.clientY - resize.pointerY) / scale)))
+                    setCanvasComments(comments => comments.map(item => item.id === comment.id ? { ...item, canvasWidth: width, canvasHeight: height } : item))
+                    return
+                  }
+                  const drag = draggingComment.current
+                  if (!drag || drag.id !== comment.id || !flowInstance.current) return
+                  const position = flowInstance.current.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                  const nextX = position.x - drag.offsetX
+                  const nextY = position.y - drag.offsetY
+                  setCanvasComments(comments => comments.map(item => item.id === comment.id ? { ...item, posicionX: nextX, posicionY: nextY } : item))
+                }}
+                onPointerUp={event => {
+                  const resize = resizingComment.current
+                  if (resize?.id === comment.id) {
+                    resizingComment.current = null
+                    const current = canvasComments.find(item => item.id === comment.id)
+                    if (current) void resizeCanvasComment(comment.id, { width: current.canvasWidth, height: current.canvasHeight })
+                    return
+                  }
+                  const drag = draggingComment.current
+                  if (!drag || drag.id !== comment.id || !flowInstance.current) return
+                  draggingComment.current = null
+                  const position = flowInstance.current.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                  void moveCanvasComment(comment.id, { x: position.x - drag.offsetX, y: position.y - drag.offsetY })
+                }}
+                onClick={event => {
+                  event.stopPropagation()
+                  setSelectedCommentId(comment.id)
+                }}
+                style={{
+                  position: 'absolute',
+                  left: comment.posicionX ?? 0,
+                  top: comment.posicionY ?? 0,
+                  transform: 'translate(-8px, -8px)',
+                  width: comment.canvasWidth || 180,
+                  height: comment.canvasHeight || 90,
+                  padding: '12px 28px 12px 12px',
+                  borderRadius: 0,
+                  border: selectedCommentId === comment.id ? '2px solid #2563eb' : '2px solid #111827',
+                  background: '#ffffff',
+                  color: '#172033',
+                  boxShadow: 'none',
+                  cursor: 'grab',
+                  fontSize: 13,
+                  lineHeight: 1.35,
+                  zIndex: 20,
+                  userSelect: 'none',
+                  pointerEvents: 'auto',
+                  overflow: 'hidden',
+                  overflowWrap: 'anywhere'
+                }}
+              >
+                <span aria-hidden="true" style={{ position: 'absolute', right: -2, top: -2, width: 17, height: 17, background: '#ffffff', borderLeft: '2px solid #111827', borderBottom: '2px solid #111827', clipPath: 'polygon(0 0, 100% 0, 100% 100%)' }} />
+                <strong style={{ display: 'block', marginBottom: 4 }}>{comment.authorName}</strong>
+                {editingCommentId === comment.id ? <>
+                  <textarea autoFocus value={editingCommentText} onChange={event => setEditingCommentText(event.target.value)} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()} rows={3} maxLength={2000} style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', border: '1px solid #111827', padding: 5 }} />
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <button type="button" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); void updateCanvasComment(comment.id) }}>Guardar</button>
+                    <button type="button" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); setEditingCommentId(null) }}>Cancelar</button>
+                  </div>
+                </> : <span>{comment.content}</span>}
+                {selectedCommentId === comment.id && <div
+                  className="uml-comment-resize-handle"
+                  role="separator"
+                  aria-label="Cambiar tamaño del comentario"
+                  title="Arrastra para cambiar el tamaño"
+                  onPointerDown={event => {
+                    event.stopPropagation()
+                    resizingComment.current = { id: comment.id, pointerX: event.clientX, pointerY: event.clientY, width: comment.canvasWidth || 180, height: comment.canvasHeight || 90 }
+                    event.currentTarget.parentElement?.setPointerCapture(event.pointerId)
+                  }}
+                />}
+              </div>
+            ))}
+          </ViewportPortal>
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#cbd5e1" />
           <Controls />
           {!historicalView && <MiniMap nodeStrokeWidth={3} zoomable pannable />}
@@ -2642,6 +2904,8 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           diagramId={diagram.id}
           projectId={project.id}
           token={auth.token}
+          initialFlutter={generatorWithFlutter}
+          simplifiedBackend={!generatorWithFlutter}
           onClose={() => setShowGenerator(false)}
           onError={onError}
         />
@@ -2682,6 +2946,16 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
             setShowVersions(false)
           }}
           onRestored={handleRestoredDiagram}
+          onError={onError}
+        />
+      )}
+
+      {showActivity && diagram && (
+        <ActivityLogModal
+          projectId={project.id}
+          diagramId={diagram.id}
+          token={auth.token}
+          onClose={() => setShowActivity(false)}
           onError={onError}
         />
       )}

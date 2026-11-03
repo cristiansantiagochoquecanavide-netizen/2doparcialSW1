@@ -15,6 +15,7 @@ public final class GeneratorResponses {
       String basePackage,
       int totalBackendFiles,
       int totalFrontendFiles,
+      int totalFlutterFiles,
       List<GeneratedFile> files
   ) {}
 

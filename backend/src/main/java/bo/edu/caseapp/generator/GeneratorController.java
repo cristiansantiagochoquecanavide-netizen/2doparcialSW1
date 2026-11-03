@@ -28,7 +28,7 @@ public class GeneratorController {
       Authentication auth,
       @Valid @RequestBody(required = false) GenerateConfig config
   ) {
-    GenerateConfig cfg = config != null ? config : new GenerateConfig(null, null, null, null, null, null, true);
+    GenerateConfig cfg = config != null ? config : new GenerateConfig(null, null, null, null, null, null, true, false);
     return generatorService.preview(projectId, diagramId, auth.getName(), cfg);
   }
 
@@ -39,7 +39,7 @@ public class GeneratorController {
       Authentication auth,
       @Valid @RequestBody(required = false) GenerateConfig config
   ) {
-    GenerateConfig cfg = config != null ? config : new GenerateConfig(null, null, null, null, null, null, true);
+    GenerateConfig cfg = config != null ? config : new GenerateConfig(null, null, null, null, null, null, true, false);
     byte[] zipBytes = generatorService.generateZip(projectId, diagramId, auth.getName(), cfg);
 
     String filename = cfg.resolvedProjectName() + ".zip";

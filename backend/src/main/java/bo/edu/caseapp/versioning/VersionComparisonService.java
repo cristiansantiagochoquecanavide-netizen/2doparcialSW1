@@ -66,8 +66,10 @@ public class VersionComparisonService {
       JsonNode a = mapper.readTree(before.getSnapshotJson());
       JsonNode b = mapper.readTree(after.getSnapshotJson());
       StringBuilder out = new StringBuilder();
-      appendDiff(out, "CLASE", byId(a.path("elements")), byId(b.path("elements")));
-      appendDiff(out, "RELACION", byId(a.path("relations")), byId(b.path("relations")));
+      Map<String, String> classNames = classNames(a.path("elements"));
+      classNames.putAll(classNames(b.path("elements")));
+      appendDiff(out, "CLASE", byId(a.path("elements")), byId(b.path("elements")), Map.of());
+      appendDiff(out, "RELACION", byId(a.path("relations")), byId(b.path("relations")), classNames);
       if (out.isEmpty()) out.append("No se detectaron diferencias estructurales entre los snapshots.");
       out.append("\nContexto UML de ").append(after.getNumeroVersion()).append(": ");
       out.append(context(b));
@@ -83,19 +85,25 @@ public class VersionComparisonService {
     return result;
   }
 
-  private void appendDiff(StringBuilder out, String kind, Map<String, JsonNode> before, Map<String, JsonNode> after) {
+  private void appendDiff(StringBuilder out, String kind, Map<String, JsonNode> before, Map<String, JsonNode> after, Map<String, String> classNames) {
     Set<String> ids = new TreeSet<>(); ids.addAll(before.keySet()); ids.addAll(after.keySet());
     int count = 0;
     for (String id : ids) {
       JsonNode old = before.get(id), current = after.get(id);
       if (Objects.equals(old, current)) continue;
       if (count++ == MAX_CHANGES) { out.append("\n… hay más cambios omitidos"); break; }
-      String label = label(current != null ? current : old);
+      String label = label(current != null ? current : old, classNames);
       out.append("\n- ").append(kind).append(" ").append(label).append(": ")
           .append(old == null ? "agregada" : current == null ? "eliminada" : "modificada");
       if (old != null) out.append("; antes=").append(compact(old));
       if (current != null) out.append("; después=").append(compact(current));
     }
+  }
+
+  private Map<String, String> classNames(JsonNode array) {
+    Map<String, String> names = new HashMap<>();
+    if (array.isArray()) array.forEach(item -> names.put(item.path("id").asText(), item.path("nombre").asText("clase")));
+    return names;
   }
 
   private String context(JsonNode snapshot) {
@@ -107,7 +115,14 @@ public class VersionComparisonService {
     return "clases=" + classes + "; relaciones=" + relations;
   }
 
-  private String label(JsonNode node) {
+  private String label(JsonNode node) { return label(node, Map.of()); }
+
+  private String label(JsonNode node, Map<String, String> classNames) {
+    if (!classNames.isEmpty()) {
+      String source = classNames.get(node.path("elementoOrigen").asText());
+      String target = classNames.get(node.path("elementoDestino").asText());
+      if (source != null || target != null) return (source == null ? "?" : source) + " → " + (target == null ? "?" : target);
+    }
     String name = node.path("nombre").asText("");
     if (name.isBlank()) name = node.path("nombreRelacion").asText("");
     if (name.isBlank()) name = node.path("id").asText("sin nombre");

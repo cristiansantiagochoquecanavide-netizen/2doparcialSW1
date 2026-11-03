@@ -12,7 +12,9 @@ import bo.edu.caseapp.user.UserRepository;
 import bo.edu.caseapp.versioning.VersionRequests.CreateVersion;
 import bo.edu.caseapp.versioning.VersionResponses.VersionDetail;
 import bo.edu.caseapp.versioning.VersionResponses.VersionSummary;
+import bo.edu.caseapp.versioning.VersionResponses.ActivityItem;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
 import org.springframework.data.domain.Page;
@@ -67,6 +69,86 @@ public class VersionService {
     projectService.requireAccess(projectId, email);
     validateDiagramBelongsToProject(projectId, diagramId);
     return versionRepo.findByDiagramaIdOrderByNumeroVersionDesc(diagramId, pageable).map(this::toSummary);
+  }
+
+  @Transactional(readOnly = true)
+  public List<ActivityItem> activity(UUID projectId, UUID diagramId, String email) {
+    projectService.requireAccess(projectId, email);
+    validateDiagramBelongsToProject(projectId, diagramId);
+    List<VersionDiagrama> versions = versionRepo.findByDiagramaIdOrderByNumeroVersionDesc(diagramId);
+    List<ActivityItem> result = new ArrayList<>();
+    for (int i = 0; i < versions.size(); i++) {
+      VersionDiagrama current = versions.get(i);
+      VersionDiagrama previous = i + 1 < versions.size() ? versions.get(i + 1) : null;
+      result.add(new ActivityItem(current.getId(), current.getNumeroVersion(), current.getUsuario().getName(),
+          current.getUsuario().getEmail(), current.getFecha(), current.getSourceRevision(),
+          current.getOperationType(), affectedElements(previous == null ? null : previous.getSnapshotJson(), current.getSnapshotJson())));
+    }
+    return result;
+  }
+
+  @Transactional(readOnly = true)
+  public String activityContext(UUID projectId, UUID diagramId, String email) {
+    if (diagramId == null) return "No hay un diagrama abierto para consultar su bitácora.";
+    StringBuilder text = new StringBuilder("Bitácora de actividad del equipo:\n");
+    for (ActivityItem item : activity(projectId, diagramId, email)) {
+      text.append("- ").append(item.fecha()).append(" · ").append(item.autorNombre())
+          .append(" (").append(item.autorEmail()).append(") · ")
+          .append(item.operacion()).append(" · revisión ").append(item.revision()).append("\n");
+      if (item.elementosAfectados().isEmpty()) text.append("  Elementos: sin cambios estructurales detectados\n");
+      else text.append("  Elementos: ").append(String.join(", ", item.elementosAfectados())).append("\n");
+    }
+    return text.length() > 7000 ? text.substring(0, 6900) + "\n[bitácora truncada]" : text.toString();
+  }
+
+  private List<String> affectedElements(String previousJson, String currentJson) {
+    try {
+      JsonNode before = previousJson == null ? objectMapper.createObjectNode() : objectMapper.readTree(previousJson);
+      JsonNode after = objectMapper.readTree(currentJson);
+      Map<String, String> classNames = classNames(before.path("elements"));
+      classNames.putAll(classNames(after.path("elements")));
+      List<String> affected = new ArrayList<>();
+      for (String collection : List.of("elements", "relations")) {
+        Map<String, JsonNode> oldItems = byId(before.path(collection));
+        Map<String, JsonNode> newItems = byId(after.path(collection));
+        Set<String> ids = new LinkedHashSet<>(); ids.addAll(oldItems.keySet()); ids.addAll(newItems.keySet());
+        for (String id : ids) {
+          JsonNode oldItem = oldItems.get(id), newItem = newItems.get(id);
+          if (Objects.equals(oldItem, newItem)) continue;
+          String kind = collection.equals("elements") ? "CLASE" : "RELACIÓN";
+          String action = oldItem == null ? "AGREGADO" : newItem == null ? "ELIMINADO" : "MODIFICADO";
+          JsonNode item = newItem == null ? oldItem : newItem;
+          affected.add(kind + " «" + activityLabel(item, collection.equals("relations") ? classNames : Map.of()) + "» · " + action);
+          if (affected.size() >= 40) return affected;
+        }
+      }
+      return affected;
+    } catch (Exception ignored) {
+      return List.of("No se pudo calcular el detalle del snapshot");
+    }
+  }
+
+  private Map<String, JsonNode> byId(JsonNode array) {
+    Map<String, JsonNode> result = new LinkedHashMap<>();
+    if (array.isArray()) array.forEach(item -> { if (item.path("id").isTextual()) result.put(item.path("id").asText(), item); });
+    return result;
+  }
+
+  private Map<String, String> classNames(JsonNode array) {
+    Map<String, String> names = new HashMap<>();
+    if (array.isArray()) array.forEach(item -> names.put(item.path("id").asText(), item.path("nombre").asText("clase")));
+    return names;
+  }
+
+  private String activityLabel(JsonNode item, Map<String, String> classNames) {
+    if (!classNames.isEmpty()) {
+      String source = classNames.get(item.path("elementoOrigen").asText());
+      String target = classNames.get(item.path("elementoDestino").asText());
+      if (source != null || target != null) return (source == null ? "?" : source) + " → " + (target == null ? "?" : target);
+    }
+    String name = item.path("nombre").asText("");
+    if (name.isBlank()) name = item.path("nombreRelacion").asText("");
+    return name.isBlank() ? item.path("id").asText("sin nombre") : name;
   }
 
   @Transactional(readOnly = true)

@@ -67,6 +67,9 @@ public class CodeGeneratorService {
     Map<String, String> frontendFiles = config.resolvedIncludeFrontend()
         ? generateFrontendFiles(elements, config, diagram.getNombre())
         : Collections.emptyMap();
+    Map<String, String> flutterFiles = config.resolvedIncludeFlutter()
+        ? generateFlutterFiles(elements, config, diagram.getNombre())
+        : Collections.emptyMap();
 
     List<GeneratedFile> list = new ArrayList<>();
     backendFiles.forEach((path, content) ->
@@ -75,12 +78,16 @@ public class CodeGeneratorService {
     frontendFiles.forEach((path, content) ->
         list.add(new GeneratedFile(path, detectLanguage(path), content))
     );
+    flutterFiles.forEach((path, content) ->
+        list.add(new GeneratedFile(path, detectLanguage(path), content))
+    );
 
     return new GenerationPreview(
         config.resolvedProjectName(),
         config.resolvedPackage(),
         backendFiles.size(),
         frontendFiles.size(),
+        flutterFiles.size(),
         list
     );
   }
@@ -111,6 +118,9 @@ public class CodeGeneratorService {
     Map<String, String> frontendFiles = config.resolvedIncludeFrontend()
         ? generateFrontendFiles(elements, config, diagram.getNombre())
         : Collections.emptyMap();
+    Map<String, String> flutterFiles = config.resolvedIncludeFlutter()
+        ? generateFlutterFiles(elements, config, diagram.getNombre())
+        : Collections.emptyMap();
 
     // Registrar en BD la generación
     try {
@@ -133,6 +143,13 @@ public class CodeGeneratorService {
 
       for (Map.Entry<String, String> entry : frontendFiles.entrySet()) {
         ZipEntry ze = new ZipEntry(rootDir + "frontend/" + entry.getKey());
+        zos.putNextEntry(ze);
+        zos.write(entry.getValue().getBytes(StandardCharsets.UTF_8));
+        zos.closeEntry();
+      }
+
+      for (Map.Entry<String, String> entry : flutterFiles.entrySet()) {
+        ZipEntry ze = new ZipEntry(rootDir + "flutter/" + entry.getKey());
         zos.putNextEntry(ze);
         zos.write(entry.getValue().getBytes(StandardCharsets.UTF_8));
         zos.closeEntry();
@@ -857,6 +874,377 @@ public class CodeGeneratorService {
         """;
   }
 
+  // =========================================================================
+  // GENERADOR FRONTEND FLUTTER + REGISTRO DE DATOS POR VOZ
+  // =========================================================================
+
+  private Map<String, String> generateFlutterFiles(
+      List<ElementoUML> elements,
+      GenerateConfig config,
+      String diagramName
+  ) {
+    Map<String, String> files = new LinkedHashMap<>();
+    List<ElementoUML> validClasses = elements.stream()
+        .filter(e -> e.getTipoElemento() != TipoElementoUML.INTERFAZ)
+        .toList();
+    String context = escapeDart(diagramName == null || diagramName.isBlank()
+        ? config.resolvedProjectName()
+        : diagramName);
+
+    files.put("pubspec.yaml", generateFlutterPubspec(config));
+    files.put("lib/api_client.dart", generateFlutterApiClient(config));
+    files.put("lib/voice_register.dart", generateFlutterVoiceRegister());
+    files.put("lib/crud_screen.dart", generateFlutterCrudScreen());
+    files.put("lib/main.dart", generateFlutterMain(validClasses, config, context));
+    files.put("build_apk.ps1", generateFlutterApkScript(config));
+    files.put("build_apk.bat", generateFlutterApkBatch(config));
+    files.put("README.md", generateFlutterReadme(config, context));
+    return files;
+  }
+
+  private String generateFlutterPubspec(GenerateConfig config) {
+    return """
+        name: %s_flutter
+        description: Frontend Flutter generado desde el modelo UML.
+        publish_to: 'none'
+        version: 1.0.0+1
+
+        environment:
+          sdk: '>=3.3.0 <4.0.0'
+
+        dependencies:
+          flutter:
+            sdk: flutter
+          http: ^1.2.2
+          speech_to_text: ^7.0.0
+
+        dev_dependencies:
+          flutter_test:
+            sdk: flutter
+          flutter_lints: ^4.0.0
+
+        flutter:
+          uses-material-design: true
+        """.formatted(config.resolvedProjectName().replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase());
+  }
+
+  private String generateFlutterApiClient(GenerateConfig config) {
+    return """
+        import 'dart:convert';
+        import 'package:http/http.dart' as http;
+
+        class ApiClient {
+          // Android Emulator usa 10.0.2.2 para acceder al host local.
+          static const baseUrl = String.fromEnvironment(
+            'API_URL',
+            defaultValue: 'http://10.0.2.2:%d',
+          );
+
+          Future<dynamic> request(String method, String endpoint, [Map<String, dynamic>? body]) async {
+            final uri = Uri.parse('$baseUrl$endpoint');
+            final headers = {'Content-Type': 'application/json'};
+            late http.Response response;
+            if (method == 'POST') {
+              response = await http.post(uri, headers: headers, body: jsonEncode(body ?? {}));
+            } else if (method == 'DELETE') {
+              response = await http.delete(uri, headers: headers);
+            } else if (method == 'PUT') {
+              response = await http.put(uri, headers: headers, body: jsonEncode(body ?? {}));
+            } else {
+              response = await http.get(uri, headers: headers);
+            }
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              throw Exception('Error ${response.statusCode}: ${response.body}');
+            }
+            return response.statusCode == 204 || response.body.isEmpty ? null : jsonDecode(response.body);
+          }
+        }
+        """.formatted(config.resolvedPort());
+  }
+
+  private String generateFlutterVoiceRegister() {
+    return """
+        import 'package:flutter/material.dart';
+        import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+        class VoiceRegisterButton extends StatefulWidget {
+          final ValueChanged<String> onText;
+          const VoiceRegisterButton({super.key, required this.onText});
+
+          @override
+          State<VoiceRegisterButton> createState() => _VoiceRegisterButtonState();
+        }
+
+        class _VoiceRegisterButtonState extends State<VoiceRegisterButton> {
+          final stt.SpeechToText speech = stt.SpeechToText();
+          bool listening = false;
+
+          Future<void> toggle() async {
+            if (listening) {
+              await speech.stop();
+              setState(() => listening = false);
+              return;
+            }
+            final ready = await speech.initialize();
+            if (!ready) return;
+            setState(() => listening = true);
+            await speech.listen(
+              localeId: 'es_BO',
+              onResult: (result) {
+                widget.onText(result.recognizedWords);
+                if (result.finalResult && mounted) setState(() => listening = false);
+              },
+            );
+          }
+
+          @override
+          Widget build(BuildContext context) => IconButton(
+            tooltip: listening ? 'Detener registro por voz' : 'Registrar por voz',
+            icon: Icon(listening ? Icons.mic : Icons.mic_none, color: listening ? Colors.red : null),
+            onPressed: toggle,
+          );
+        }
+        """;
+  }
+
+  private String generateFlutterCrudScreen() {
+    return """
+        import 'package:flutter/material.dart';
+        import 'api_client.dart';
+        import 'voice_register.dart';
+
+        class FieldDefinition {
+          final String name;
+          final String type;
+          const FieldDefinition(this.name, this.type);
+        }
+
+        class CrudScreen extends StatefulWidget {
+          final String title;
+          final String endpoint;
+          final List<FieldDefinition> fields;
+          const CrudScreen({super.key, required this.title, required this.endpoint, required this.fields});
+
+          @override
+          State<CrudScreen> createState() => _CrudScreenState();
+        }
+
+        class _CrudScreenState extends State<CrudScreen> {
+          final ApiClient api = ApiClient();
+          final Map<String, TextEditingController> controllers = {};
+          List<dynamic> items = [];
+          String? error;
+          bool loading = false;
+
+          @override
+          void initState() {
+            super.initState();
+            for (final field in widget.fields) controllers[field.name] = TextEditingController();
+            load();
+          }
+
+          @override
+          void dispose() { for (final c in controllers.values) c.dispose(); super.dispose(); }
+
+          Future<void> load() async {
+            setState(() => loading = true);
+            try { items = await api.request('GET', widget.endpoint) as List<dynamic>; error = null; }
+            catch (e) { error = e.toString(); }
+            if (mounted) setState(() => loading = false);
+          }
+
+          void applyVoice(String text) {
+            // Acepta frases como: "registrar nombre: Carlos, ciudad: La Paz".
+            final normalized = text.trim().replaceFirst(RegExp(r'^.*?registrar\\s+', caseSensitive: false), '');
+            for (final part in normalized.split(RegExp(r',|\\s+y\\s+', caseSensitive: false))) {
+              final pieces = part.split(RegExp(r'\\s*[:=]\\s*'));
+              if (pieces.length < 2) continue;
+              final key = pieces.first.trim();
+              final field = widget.fields.cast<FieldDefinition?>().firstWhere(
+                (item) => item!.name.toLowerCase() == key.toLowerCase(),
+                orElse: () => null,
+              );
+              if (field != null) controllers[field.name]?.text = pieces.sublist(1).join(':').trim();
+            }
+          }
+
+          dynamic typedValue(FieldDefinition field, String value) {
+            switch (field.type) {
+              case 'Integer': return int.tryParse(value) ?? value;
+              case 'Long': return int.tryParse(value) ?? value;
+              case 'Double': return double.tryParse(value) ?? value;
+              case 'Boolean': return value.toLowerCase() == 'true' || value.toLowerCase() == 'sí' || value == '1';
+              default: return value;
+            }
+          }
+
+          Future<void> save() async {
+            final body = <String, dynamic>{};
+            for (final field in widget.fields) {
+              final value = controllers[field.name]?.text.trim() ?? '';
+              if (value.isNotEmpty) body[field.name] = typedValue(field, value);
+            }
+            try { await api.request('POST', widget.endpoint, body); if (mounted) Navigator.pop(context); await load(); }
+            catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()))); }
+          }
+
+          Future<void> remove(String id) async {
+            try { await api.request('DELETE', '${widget.endpoint}/$id'); await load(); }
+            catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()))); }
+          }
+
+          void openForm() {
+            for (final c in controllers.values) c.clear();
+            showDialog(context: context, builder: (_) => AlertDialog(
+              title: Row(children: [Expanded(child: Text('Nuevo ${widget.title}')), VoiceRegisterButton(onText: applyVoice)]),
+              content: SingleChildScrollView(child: Column(children: widget.fields.map((field) => TextField(
+                controller: controllers[field.name], decoration: InputDecoration(labelText: field.name),
+              )).toList())),
+              actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')), ElevatedButton(onPressed: save, child: const Text('Guardar'))],
+            ));
+          }
+
+          @override
+          Widget build(BuildContext context) => Scaffold(
+            appBar: AppBar(title: Text(widget.title), actions: [IconButton(onPressed: load, icon: const Icon(Icons.refresh))]),
+            body: loading ? const Center(child: CircularProgressIndicator()) : error != null
+              ? Center(child: Text(error!))
+              : ListView.builder(itemCount: items.length, itemBuilder: (_, i) {
+                  final item = items[i] as Map<String, dynamic>;
+                  return Card(child: ListTile(
+                    title: Text(item.values.take(2).map((v) => '$v').join(' · ')),
+                    subtitle: Text(item.entries.map((e) => '${e.key}: ${e.value}').join(' | ')),
+                    trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => remove('${item['id']}')),
+                  ));
+                }),
+            floatingActionButton: FloatingActionButton.extended(onPressed: openForm, icon: const Icon(Icons.add), label: const Text('Registrar')),
+          );
+        }
+        """;
+  }
+
+  private String generateFlutterMain(List<ElementoUML> classes, GenerateConfig config, String context) {
+    StringBuilder tabs = new StringBuilder();
+    for (ElementoUML el : classes) {
+      String name = toPascalCase(el.getNombre());
+      String endpoint = "/api/v1/" + toPlural(name.toLowerCase());
+      StringBuilder fields = new StringBuilder("[");
+      for (FieldDef field : parseFields(el.getPropiedadesJson())) {
+        if (!field.name().equalsIgnoreCase("id")) {
+          fields.append("const FieldDefinition('").append(escapeDart(field.name())).append("', '")
+              .append(escapeDart(field.javaType())).append("'),");
+        }
+      }
+      fields.append("]");
+      tabs.append("        CrudScreen(title: '").append(escapeDart(name)).append("', endpoint: '")
+          .append(endpoint).append("', fields: ").append(fields).append("),\n");
+    }
+    String first = classes.isEmpty() ? "const Scaffold(body: Center(child: Text('No hay clases para mostrar')))" : "screens[0]";
+    return """
+        import 'package:flutter/material.dart';
+        import 'crud_screen.dart';
+
+        void main() => runApp(const GeneratedApp());
+
+        class GeneratedApp extends StatelessWidget {
+          const GeneratedApp({super.key});
+          @override
+          Widget build(BuildContext context) {
+            final screens = <Widget>[
+        %s            ];
+            return MaterialApp(
+              debugShowCheckedModeBanner: false,
+              title: '%s',
+              theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+              home: screens.isEmpty ? %s : _Home(screens: screens, contextName: '%s'),
+            );
+          }
+        }
+
+        class _Home extends StatefulWidget {
+          final List<Widget> screens;
+          final String contextName;
+          const _Home({required this.screens, required this.contextName});
+          @override State<_Home> createState() => _HomeState();
+        }
+        class _HomeState extends State<_Home> {
+          int index = 0;
+          @override
+          Widget build(BuildContext context) => Scaffold(
+            drawer: Drawer(child: ListView(children: [DrawerHeader(child: Text(widget.contextName)), ...List.generate(widget.screens.length, (i) => ListTile(title: Text('Módulo ${i + 1}'), onTap: () { setState(() => index = i); Navigator.pop(context); }))])),
+            body: widget.screens[index],
+          );
+        }
+        """.formatted(tabs.toString(), escapeDart(config.resolvedProjectName()), first, context);
+  }
+
+  private String generateFlutterReadme(GenerateConfig config, String context) {
+    return """
+        # Frontend Flutter — %s
+
+        Generado desde el contexto del diagrama UML: **%s**.
+
+        ## Ejecución
+        1. Instala Flutter.
+        2. Ejecuta `flutter create .` para crear las carpetas Android/iOS/Web del proyecto.
+           En Android agrega el permiso `android.permission.RECORD_AUDIO` a `android/app/src/main/AndroidManifest.xml` para activar el micrófono.
+        3. Ejecuta `flutter pub get`.
+        4. Inicia el backend Spring Boot en el puerto `%d`.
+        5. Ejecuta `flutter run`.
+
+        En Android Emulator la API apunta a `10.0.2.2`. Para otro entorno usa:
+        `flutter run --dart-define=API_URL=http://HOST:PUERTO`.
+
+        ## Crear APK de prueba
+        En Windows ejecuta `build_apk.ps1` o `build_apk.bat`.
+        El archivo resultante estará en `build/app/outputs/flutter-apk/app-debug.apk`.
+
+        ## Registro por voz
+        En cada módulo pulsa **Registrar**, luego el micrófono y di, por ejemplo:
+        `registrar nombre: Carlos, ciudad: La Paz`.
+        Revisa los campos reconocidos antes de pulsar **Guardar**.
+        """.formatted(config.resolvedProjectName(), context, config.resolvedPort());
+  }
+
+  private String generateFlutterApkScript(GenerateConfig config) {
+    return """
+        $ErrorActionPreference = 'Stop'
+        if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
+          throw 'Flutter no está instalado o no está en el PATH.'
+        }
+        flutter create .
+        flutter pub get
+        $manifest = 'android/app/src/main/AndroidManifest.xml'
+        if (Test-Path $manifest) {
+          $xml = Get-Content $manifest -Raw
+          if ($xml -notmatch 'android.permission.RECORD_AUDIO') {
+            $xml = $xml -replace '(<manifest[^>]*>)', '$1`n    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
+            Set-Content -Path $manifest -Value $xml -Encoding UTF8
+          }
+        }
+        $apiUrl = if ($env:API_URL) { $env:API_URL } else { 'http://10.0.2.2:%d' }
+        flutter build apk --debug --dart-define=API_URL=$apiUrl
+        Write-Host 'APK creado en build/app/outputs/flutter-apk/app-debug.apk' -ForegroundColor Green
+        """.formatted(config.resolvedPort());
+  }
+
+  private String generateFlutterApkBatch(GenerateConfig config) {
+    return """
+        @echo off
+        setlocal
+        where flutter >nul 2>nul || (echo Flutter no esta instalado o no esta en PATH.& exit /b 1)
+        flutter create .
+        flutter pub get
+        if "%API_URL%"=="" set API_URL=http://10.0.2.2:%d
+        flutter build apk --debug --dart-define=API_URL=%API_URL%
+        echo APK creado en build\\app\\outputs\\flutter-apk\\app-debug.apk
+        """.formatted(config.resolvedPort());
+  }
+
+  private String escapeDart(String value) {
+    return value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ");
+  }
+
   private String generateRootDockerCompose(GenerateConfig config) {
     return """
         services:
@@ -999,6 +1387,7 @@ public class CodeGeneratorService {
     if (path.endsWith(".xml")) return "xml";
     if (path.endsWith(".yml") || path.endsWith(".yaml")) return "yaml";
     if (path.endsWith(".json")) return "json";
+    if (path.endsWith(".dart")) return "dart";
     if (path.endsWith(".sql")) return "sql";
     if (path.endsWith(".css")) return "css";
     return "plaintext";
