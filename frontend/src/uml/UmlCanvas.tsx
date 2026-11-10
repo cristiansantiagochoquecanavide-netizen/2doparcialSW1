@@ -59,7 +59,7 @@ import { CanvasProposalBar } from './CanvasProposalBar'
 import { projectCanvasProposal, greenPreviewEdge, overlayCanvasGraph, affectedPreviewNodeIds } from './canvasProposalPreview.mjs'
 import './canvas-proposal.css'
 
-const base = import.meta.env.VITE_API_BASE_URL !== undefined ? import.meta.env.VITE_API_BASE_URL : ''
+const base = (import.meta.env.VITE_API_BASE_URL !== undefined ? import.meta.env.VITE_API_BASE_URL : '').replace(/\/+$/, '')
 const NODE_TYPES = { umlClass: UmlClassNode }
 const diagramRequestCoordinator = createDiagramRequestCoordinator()
 
@@ -1363,11 +1363,9 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     function connectWs() {
       if (isDestroyed || !navigator.onLine) return
       try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        let host = window.location.host
-        if (base) {
-          host = base.replace(/^https?:\/\//, '')
-        }
+        const targetUrl = new URL(base || window.location.origin)
+        const protocol = targetUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+        const host = targetUrl.host
         ws = new WebSocket(`${protocol}//${host}/ws/diagrams/${currentDiagramId}`, ['case-events-v1', `bearer.${auth.token}`])
 
         ws.onopen = () => {

@@ -18,6 +18,8 @@ WORKDIR /app
 # Copia del artefacto JAR generado
 COPY --from=builder /app/target/*.jar app.jar
 
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Xss512k"
+
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

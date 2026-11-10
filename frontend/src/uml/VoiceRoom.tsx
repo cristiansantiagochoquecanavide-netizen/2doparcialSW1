@@ -21,7 +21,7 @@ type VoiceEvent = {
 }
 type Props = { projectId: string; token: string; currentUserName: string; onBackToChat: () => void; roomId?: string; roomName?: string }
 
-const apiBase = import.meta.env.VITE_API_BASE_URL || ''
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 function friendlyMediaError(error: unknown) {
   const name = error instanceof DOMException ? error.name : ''

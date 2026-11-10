@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -58,7 +59,7 @@ test('edge stroke markers and labels use only green; deletion is dashed and expl
   assert.match(edge.label, /Eliminar/); assert.equal(edge.style.strokeDasharray, '7 4'); assert.equal(original.style.stroke, '#475569')
 })
 async function bar() {
-  const result = await build({ entryPoints: [new URL('./CanvasProposalBar.tsx', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')], bundle: true, platform: 'node', format: 'cjs', write: false, jsx: 'automatic', external: ['react', 'react/jsx-runtime'] })
+  const result = await build({ entryPoints: [fileURLToPath(new URL('./CanvasProposalBar.tsx', import.meta.url))], bundle: true, platform: 'node', format: 'cjs', write: false, jsx: 'automatic', external: ['react', 'react/jsx-runtime'] })
   const module = { exports: {} }; new Function('require', 'module', 'exports', result.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports)
   return module.exports.CanvasProposalBar
 }

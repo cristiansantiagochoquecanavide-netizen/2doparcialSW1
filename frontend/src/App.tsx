@@ -5,7 +5,7 @@ type Role = 'PROPIETARIO' | 'EDITOR' | 'LECTOR'
 type Project = { id: string; name: string; description: string | null; role: Role; createdAt: string }
 type Member = { id: string; userId: string; name: string; email: string; role: Role }
 type Auth = { token: string; name: string; email: string }
-const base = import.meta.env.VITE_API_BASE_URL !== undefined ? import.meta.env.VITE_API_BASE_URL : ''
+const base = (import.meta.env.VITE_API_BASE_URL !== undefined ? import.meta.env.VITE_API_BASE_URL : '').replace(/\/+$/, '')
 
 function readStoredAuth(): Auth | null {
   try {

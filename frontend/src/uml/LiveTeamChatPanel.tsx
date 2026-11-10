@@ -27,7 +27,7 @@ interface Props {
   onToggleWide: () => void; onClose: () => void; onSwitchToInspector: () => void
 }
 const PAGE_SIZE = 50
-const apiBase = import.meta.env.VITE_API_BASE_URL || ''
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 function mergeMessages(old: ChatMessage[], next: ChatMessage[]) {
   const map = new Map(old.map((message) => [message.id, message]))

@@ -1,6 +1,7 @@
 export function canEditSharedContext(role) { return ['PROPIETARIO', 'OWNER', 'EDITOR'].includes(String(role).toUpperCase()) }
 export async function analysisRequest({ apiBase = '', projectId, diagramId, token }, action, input) {
-  const base = `${apiBase}/api/projects/${encodeURIComponent(projectId)}/ai/analysis`
+  const cleanBase = String(apiBase || '').replace(/\/+$/, '')
+  const base = `${cleanBase}/api/projects/${encodeURIComponent(projectId)}/ai/analysis`
   let path = `${base}/diagrams/${encodeURIComponent(diagramId)}`
   let method = 'GET'
   let body

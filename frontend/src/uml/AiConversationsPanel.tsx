@@ -12,7 +12,7 @@ type Message = { id: string; clientMessageId: string | null; senderType: 'USER' 
 type Page = { messages: Message[]; nextCursor: string | null; hasMore: boolean }
 type Memory = { projectMemory: { systemName: string | null; systemDescription: string | null; businessDomain: string | null; objectives: string | null; additionalContext: string | null } | null; entries: { id: string; entryType: string; confidenceScope: string; content: string; diagramId: string | null }[] }
 type Props = { projectId: string; diagramId: string | null; token: string; currentUser: { name: string; email: string; role: string }; comparisonVersionIds: string[]; active?: boolean; chatOnly?: boolean; navigationHidden?: boolean; selectedConversationId?: string; selectedConversationTitle?: string }
-const apiBase = import.meta.env.VITE_API_BASE_URL || ''
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 const entryLabels: Record<string,string> = { SYSTEM_CONTEXT: 'Contexto del sistema', BUSINESS_RULE: 'Regla de negocio', FUNCTIONAL_CONSTRAINT: 'Restricción funcional', ARCHITECTURE_DECISION: 'Decisión arquitectónica', MODELING_CONVENTION: 'Convención de modelado', ADDITIONAL: 'Información adicional' }
 
 async function api<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
