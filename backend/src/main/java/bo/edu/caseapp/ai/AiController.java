@@ -9,7 +9,9 @@ import bo.edu.caseapp.uml.UmlService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -18,11 +20,30 @@ public class AiController {
   private final AiAssistantService aiService;
   private final InteraccionIaRepository iaRepo;
   private final UmlService umlService;
+  private final GroqTranscriptionService transcriptionService;
 
-  public AiController(AiAssistantService aiService, InteraccionIaRepository iaRepo, UmlService umlService) {
+  @Autowired
+  public AiController(AiAssistantService aiService, InteraccionIaRepository iaRepo, UmlService umlService, GroqTranscriptionService transcriptionService) {
     this.aiService = aiService;
     this.iaRepo = iaRepo;
     this.umlService = umlService;
+    this.transcriptionService = transcriptionService;
+  }
+
+  public AiController(AiAssistantService aiService, InteraccionIaRepository iaRepo, UmlService umlService) {
+    this(aiService, iaRepo, umlService, null);
+  }
+
+
+  @PostMapping(value = "/transcribe", consumes = "multipart/form-data")
+  public AiResponses.TranscriptionResponse transcribe(
+      @PathVariable UUID projectId,
+      @PathVariable UUID diagramId,
+      Authentication auth,
+      @RequestPart("audio") MultipartFile audio
+  ) {
+    umlService.requireDiagramAccess(projectId, diagramId, auth.getName());
+    return new AiResponses.TranscriptionResponse(transcriptionService.transcribe(audio));
   }
 
   @PostMapping("/command")

@@ -26,6 +26,8 @@ type Props = {
   selectedRelationId?: string | null
 }
 
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+
 type ImageModel = {
   classes: { name: string; type: string; confidence: number; x: number | null; y: number | null; attributes: { name: string; type: string; visibility: string; confidence: number }[]; methods: { name: string; returnType: string; parameters: string; visibility: string; confidence: number }[] }[]
   relations: { source: string; target: string; type: string; name: string | null; multiplicitySource: string | null; multiplicityTarget: string | null; confidence: number; associationClass?: string | null }[]
@@ -93,6 +95,10 @@ export function AiAssistantModal({
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<any>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const recordedChunksRef = useRef<Blob[]>([])
+  const serverRecordingRef = useRef(false)
   const isListeningRef = useRef<boolean>(false)
   const finalTranscriptRef = useRef<string>('')
   const interimTranscriptRef = useRef<string>('')
@@ -144,7 +150,7 @@ export function AiAssistantModal({
     setAnalyzingStatus('Analizando imagen UML…')
 
     try {
-      const res = await fetch(`/api/projects/${projectId}/diagrams/${diagramId}/ai/analyze-image`, {
+      const res = await fetch(`${apiBase}/api/projects/${projectId}/diagrams/${diagramId}/ai/analyze-image`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -201,7 +207,7 @@ export function AiAssistantModal({
     setImageError(null)
 
     try {
-      const res = await fetch(`/api/projects/${projectId}/diagrams/${diagramId}/ai/apply-image-model`, {
+      const res = await fetch(`${apiBase}/api/projects/${projectId}/diagrams/${diagramId}/ai/apply-image-model`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -269,6 +275,59 @@ export function AiAssistantModal({
     finalTranscriptRef.current = cleanVoiceText(`${finalTranscriptRef.current} ${chunk}`)
   }
 
+  async function startServerRecording(runId: number) {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceStateStatus('ERROR')
+      setVoiceError('El navegador no admite la grabación de respaldo. Escribe el comando manualmente.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (runId !== voiceRunRef.current || !isListeningRef.current) { stream.getTracks().forEach(track => track.stop()); return }
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type))
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+      mediaStreamRef.current = stream
+      mediaRecorderRef.current = recorder
+      recordedChunksRef.current = []
+      serverRecordingRef.current = true
+      recorder.ondataavailable = event => { if (event.data.size) recordedChunksRef.current.push(event.data) }
+      recorder.onerror = () => { setVoiceError('Falló la grabación de respaldo. Escribe el comando manualmente.'); cancelListening() }
+      recorder.start(1000)
+      setVoiceError('El reconocimiento del navegador falló. Al detener, el audio se enviará a Groq para transcribirlo.')
+      isListeningRef.current = true
+      setIsListening(true)
+      setVoiceStateStatus('ESCUCHANDO')
+    } catch {
+      setIsListening(false); isListeningRef.current = false; setVoiceStateStatus('ERROR')
+      setVoiceError('No se pudo acceder al micrófono. Permite el acceso y vuelve a intentarlo.')
+    }
+  }
+
+  async function transcribeRecording(blob: Blob) {
+    if (!blob.size) { setVoiceStateStatus('ERROR'); setVoiceError('No se capturó audio. Vuelve a intentarlo.'); return }
+    setVoiceStateStatus('PROCESANDO')
+    setVoiceError('Transcribiendo audio…')
+    try {
+      const form = new FormData()
+      form.append('audio', blob, blob.type.includes('mp4') ? 'voice.mp4' : 'voice.webm')
+      const response = await fetch(`${apiBase}/api/projects/${projectId}/diagrams/${diagramId}/ai/transcribe`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.message || 'No se pudo transcribir. Comprueba la clave de Groq en Render.')
+      }
+      const data = await response.json() as { text?: string }
+      const transcript = cleanVoiceText(data.text || '')
+      if (!transcript) throw new Error('No se detectó voz. Vuelve a intentarlo.')
+      finalTranscriptRef.current = transcript
+      setTranscriptFinal(transcript); setInput(transcript); setVoiceError(null); setVoiceStateStatus('LISTO')
+    } catch (error) {
+      setVoiceStateStatus('ERROR')
+      setVoiceError(error instanceof Error ? error.message : 'No se pudo transcribir. Escribe el comando manualmente.')
+    }
+  }
+
   function startListening() {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -320,6 +379,15 @@ export function AiAssistantModal({
 
       recognition.onerror = (event: any) => {
         if (runId !== voiceRunRef.current) return
+        if (event.error === 'network') {
+          const fallbackRunId = voiceRunRef.current + 1
+          voiceRunRef.current = fallbackRunId
+          isListeningRef.current = true
+          setIsListening(true)
+          try { recognition.abort() } catch {}
+          void startServerRecording(fallbackRunId)
+          return
+        }
         if (event.error !== 'no-speech') {
           setVoiceError(`Error de micrófono (${event.error})`)
         }
@@ -351,6 +419,20 @@ export function AiAssistantModal({
   function stopListening() {
     isListeningRef.current = false
     setIsListening(false)
+    if (serverRecordingRef.current && mediaRecorderRef.current) {
+      serverRecordingRef.current = false
+      const recorder = mediaRecorderRef.current
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        recordedChunksRef.current = []
+        mediaRecorderRef.current = null
+        mediaStreamRef.current?.getTracks().forEach(track => track.stop())
+        mediaStreamRef.current = null
+        void transcribeRecording(blob)
+      }
+      try { recorder.stop() } catch { setVoiceStateStatus('ERROR'); setVoiceError('No se pudo finalizar la grabación.') }
+      return
+    }
     interimTranscriptRef.current = ''
     setTranscriptInterim('')
     if (recognitionRef.current) {
@@ -372,6 +454,12 @@ export function AiAssistantModal({
       recognitionRef.current?.abort()
     } catch {}
     recognitionRef.current = null
+    serverRecordingRef.current = false
+    try { if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop() } catch {}
+    mediaRecorderRef.current = null
+    recordedChunksRef.current = []
+    mediaStreamRef.current?.getTracks().forEach(track => track.stop())
+    mediaStreamRef.current = null
     finalTranscriptRef.current = ''
     interimTranscriptRef.current = ''
     lastFinalChunkRef.current = ''
@@ -417,7 +505,7 @@ export function AiAssistantModal({
 
     try {
       if (mode === 'command') {
-        const res = await fetch(`/api/projects/${projectId}/diagrams/${diagramId}/ai/command`, {
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/diagrams/${diagramId}/ai/command`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -450,7 +538,7 @@ export function AiAssistantModal({
         }
       } else {
         // Chat conceptual / asesoría
-        const res = await fetch(`/api/projects/${projectId}/diagrams/${diagramId}/ai/chat`, {
+        const res = await fetch(`${apiBase}/api/projects/${projectId}/diagrams/${diagramId}/ai/chat`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

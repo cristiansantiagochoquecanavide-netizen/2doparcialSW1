@@ -21,6 +21,8 @@ public final class AiResponses {
       String suggestion
   ) {}
 
+  public record TranscriptionResponse(String text) {}
+
   public record ImageReconstructionResponse(
       boolean success,
       String message,
