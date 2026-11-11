@@ -33,7 +33,7 @@ test('409 on moving classes preserves their local positions as reviewable pendin
 test('the UI exposes explicit conflict retry and never drops the 409 guard', async () => {
   const workspace = await readFile(new URL('./WorkspaceChrome.tsx', import.meta.url), 'utf8')
   const canvas = await readFile(new URL('./UmlCanvas.tsx', import.meta.url), 'utf8')
-  assert.match(workspace, /Revisar y reintentar/)
+  assert.match(workspace, /Revisar cambios/)
   assert.match(workspace, /p\.savingStatus\.includes\('Conflicto'\)/)
   assert.match(canvas, /error\.status === 409/)
 })

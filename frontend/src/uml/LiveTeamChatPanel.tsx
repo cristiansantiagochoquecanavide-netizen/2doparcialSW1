@@ -164,7 +164,7 @@ export function LiveTeamChatPanel({
   }
   function mention() {
     const result = insertAcodiMention(input, composerRef.current?.selectionStart ?? input.length)
-    if (result.text.length > 4000) { setSendError('El mensaje está lleno. Deja espacio para insertar @ACODI.'); return }
+    if (result.text.length > 4000) { setSendError('El mensaje está lleno. Deja espacio para insertar @COIN.'); return }
     setInput(result.text); requestAnimationFrame(() => { composerRef.current?.focus(); composerRef.current?.setSelectionRange(result.cursor, result.cursor) })
   }
   async function retryAcodi(message: ChatMessage) {
@@ -172,7 +172,7 @@ export function LiveTeamChatPanel({
     setAgentBusy(true); setSendError('')
     const key = retryKeys.current.get(message.id) || crypto.randomUUID(); retryKeys.current.set(message.id, key)
     try { await request(`/api/projects/${projectId}/chat/channels/${message.channelId}/messages/${message.id}/acodi/retry`, token, { method: 'POST', body: JSON.stringify({ clientRequestId: key, diagramId }) }); retryKeys.current.delete(message.id); await refresh() }
-    catch (error) { setSendError(error instanceof Error ? error.message : 'No se pudo reintentar ACODI.') } finally { setAgentBusy(false) }
+    catch (error) { setSendError(error instanceof Error ? error.message : 'No se pudo reintentar COIN.') } finally { setAgentBusy(false) }
   }
 
   const refresh = useCallback(async () => {
@@ -312,11 +312,13 @@ export function LiveTeamChatPanel({
     if (sending || !activeChannelId) return
     const outgoing = retry || { clientMessageId: crypto.randomUUID(), content: input.trim(), channelId: activeChannelId, diagramId }
     if (!outgoing.content) return
+    // COIN is the presentation name; keep the established backend mention protocol unchanged.
+    const payload = { ...outgoing, content: outgoing.content.replace(/@coin\b/gi, '@ACODI') }
     setSending(true); setSendError('')
     try {
       const message = await request<ChatMessage>(
         '/api/projects/' + projectId + '/chat/channels/' + outgoing.channelId + '/messages',
-        token, { method: 'POST', body: JSON.stringify({ ...outgoing, comparisonVersionIds: comparisonVersionIds.slice(0, 2) }) }
+        token, { method: 'POST', body: JSON.stringify({ ...payload, comparisonVersionIds: comparisonVersionIds.slice(0, 2) }) }
       )
       setMessages((old) => ({ ...old, [message.channelId]: mergeMessages(old[message.channelId] || [], [message]) }))
       setPages((old) => ({ ...old, [message.channelId]: { ...old[message.channelId], loaded: true } }))
@@ -356,7 +358,7 @@ export function LiveTeamChatPanel({
 
       {activeTab === 'members' && (
         <div className="team-members-view">
-          <div className="team-virtual-agent"><span className="team-avatar">AC</span><strong>ACODI</strong><span className="role-pill">Agente IA</span><small>Agente Colaborador de Diagramado · Invócalo con @ACODI en un canal.</small></div>
+          <div className="team-virtual-agent"><span className="team-avatar">CO</span><strong>COIN</strong><span className="role-pill">Asistente IA</span><small>Asistente colaborativo de diagramado · Invócalo con @COIN en un canal.</small></div>
           <div className="team-section-label">MIEMBROS DEL PROYECTO</div>
           {members.length === 0 ? <div className="team-state-container"><p>No hay miembros disponibles.</p></div> : (
             <ul className="team-member-list">{members.map((member) => (
@@ -401,10 +403,10 @@ export function LiveTeamChatPanel({
               <div className="team-input-scope-indicator"><UsersIcon size={11} /><span><strong>Canal del proyecto:</strong> visible para sus miembros autorizados</span></div>
               <div className="team-input-bar">
                 <textarea ref={composerRef} value={input} rows={2} maxLength={4000} onChange={(event) => { setInput(event.target.value); if (retry && event.target.value.trim() !== retry.content) { setRetry(null); setSendError('') } }} onKeyDown={inputKeyDown} placeholder={activeChannel ? 'Mensaje para #' + activeChannel.name : 'Selecciona un canal'} disabled={!activeChannel || loading || connection === 'revoked' || sending} aria-label="Escribe un mensaje" />
-                <button type="button" className="team-acodi-invoke" disabled={!activeChannel || loading || sending || connection === 'revoked'} onClick={mention} title="Invocar a ACODI — Agente Colaborador de Diagramado">@ACODI</button>
+                <button type="button" className="team-acodi-invoke" disabled={!activeChannel || loading || sending || connection === 'revoked'} onClick={mention} title="Invocar al asistente COIN">@COIN</button>
                 <button type="submit" className="team-send-btn" disabled={!activeChannel || loading || !input.trim() || sending || connection === 'revoked' || Boolean(retry && retry.channelId !== activeChannelId)} title={retry ? (retry.channelId === activeChannelId ? 'Reintentar con la misma clave de idempotencia' : 'Vuelve a #' + (channels.find((channel) => channel.id === retry.channelId)?.name || 'canal') + ' para reintentar') : 'Enviar mensaje'}><SendIcon size={14} /><span>{sending ? 'Enviando…' : retry ? (retry.channelId === activeChannelId ? 'Reintentar' : 'Volver al canal') : 'Enviar'}</span></button>
               </div>
-              <div className="team-input-hint"><small>Enter envía · Shift+Enter agrega una línea · @ACODI ayuda: memoria, análisis y propuestas</small>{sendError && <small className="team-send-error" role="alert">{sendError}</small>}</div>
+              <div className="team-input-hint"><small>Enter envía · Shift+Enter agrega una línea · @COIN ayuda con memoria, análisis y propuestas</small>{sendError && <small className="team-send-error" role="alert">{sendError}</small>}</div>
             </form>
           </section>
         </div>

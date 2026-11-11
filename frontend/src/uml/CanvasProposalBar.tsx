@@ -8,8 +8,8 @@ export function CanvasProposalBar({ active, pending, editable, busy, error, stal
 }) {
   const [confirmed, setConfirmed] = useState(false)
   if (!active && !pending.length && !error) return null
-  return <section className="acodi-canvas-bar" aria-label="Propuesta ACODI en el lienzo">
-    <strong>ACODI · {active?.description || 'Propuestas pendientes'}</strong>
+  return <section className="acodi-canvas-bar" aria-label="Propuesta COIN en el lienzo">
+    <strong>COIN · {active?.description || 'Propuestas pendientes'}</strong>
     {active?.scope === 'PRIVATE' && <small>Vista previa privada · solo tú</small>}
     <select aria-label="Propuesta compartida" value={active?.id || ''} disabled={busy || !editable} onChange={e => { setConfirmed(false); onSelect(e.target.value) }}>
       <option value="" disabled>Seleccionar propuesta</option>{pending.map(p => <option key={p.id} value={p.id}>{p.description} · {p.requesterName}</option>)}

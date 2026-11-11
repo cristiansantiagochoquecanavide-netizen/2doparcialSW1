@@ -14,7 +14,7 @@ import {
   ChatIcon
 } from './icons'
 import { LiveTeamChatPanel } from './LiveTeamChatPanel'
-import { AgentSpeechControls, AgentSpeechProvider } from './AgentSpeechUI'
+import { AgentSpeechProvider } from './AgentSpeechUI'
 import './team-collaboration.css'
 
 const tools: { label: string; icon: string; type?: TipoElementoUML; relation?: TipoRelacionUML }[] = [
@@ -61,7 +61,7 @@ function WorkspaceChromeContent(p: Props) {
   const [modelingMode, setModelingMode] = useState<'manual' | 'image' | 'voice'>('manual')
   const [relationType, setRelationType] = useState<TipoRelacionUML>('ASOCIACION')
   const [imageName, setImageName] = useState('')
-  const [commentActionsOpen, setCommentActionsOpen] = useState(false)
+  const [participantsOpen, setParticipantsOpen] = useState(false)
   const imageInput = useRef<HTMLInputElement>(null)
 
   async function openGeneration(kind: 'backend' | 'flutter') {
@@ -85,7 +85,7 @@ function WorkspaceChromeContent(p: Props) {
   const [isResizingLeft, setIsResizingLeft] = useState(false)
   const [isResizingRight, setIsResizingRight] = useState(false)
 
-  // Modo del panel lateral derecho (Inspector vs. Espacio de Equipo)
+  // Right panel switches between the inspector and team workspace.
   const [rightPanelMode, setRightPanelMode] = useState<'inspector' | 'team'>('inspector')
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false)
   const [isWideTeam, setIsWideTeam] = useState(false)
@@ -133,46 +133,28 @@ function WorkspaceChromeContent(p: Props) {
           <ChevronLeftIcon size={18} />
         </button>
         <div>
-          <span className="eyebrow">PROYECTO</span>
-          <strong>{p.projectName}</strong>
+          <span className="eyebrow">ESPACIO DE TRABAJO</span>
+          <strong>Editor UML</strong>
         </div>
         <span className="role">{p.role}</span>
       </div>
-      <div className="topbar-diagram">
+      <div className="topbar-title">
+        <strong>{p.projectName}</strong>
         <span className="eyebrow">DIAGRAMA</span>
-        <strong>{p.diagram?.nombre ?? 'Cargando diagrama…'}</strong>
+        <span className="topbar-diagram-name">{p.diagram?.nombre ?? 'Cargando diagrama…'}</span>
       </div>
-      <div className="topbar-status">
-        <span className={`chrome-status ${p.savingStatus.includes('Offline') || p.savingStatus.includes('Error') ? 'warn' : ''}`}>● {p.savingStatus}</span>
-        <span className={`chrome-status ${p.online ? 'good' : 'warn'}`}>● {p.online ? 'Conectado' : 'Sin conexión'}</span>
-        <span className={`chrome-status ${isLocked ? 'warn' : 'muted'}`}>
-          {isLocked ? <><LockIcon size={12} style={{ display: 'inline', marginRight: 4 }} /> Bloqueado ({lockUser})</> : p.readOnly ? 'Solo lectura' : '● Libre'}
-        </span>
-      </div>
+      {(() => {
+        const tone = isLocked || p.readOnly || !p.online || /Offline|Error|Conflicto/i.test(p.savingStatus) ? 'warn' : p.syncing || p.queueCount ? 'busy' : 'good'
+        const label = isLocked ? `Bloqueado · ${lockUser}` : p.readOnly ? 'Solo lectura' : !p.online ? 'Sin conexión' : p.syncing || p.queueCount ? 'Sincronizando' : p.savingStatus === 'Guardado' ? 'Guardado · Disponible' : p.savingStatus || 'Guardado · Disponible'
+        return <div className={`workspace-state ${tone}`} role="status" aria-live="polite"><i aria-hidden="true" />{label}{p.wsConnected && p.online ? <span>En línea</span> : null}</div>
+      })()}
       <div className="topbar-actions">
-        <div className="avatar-stack" title="Colaboradores del proyecto">
-          {p.members.slice(0, 4).map(m => <span key={m.id} title={`${m.name} · ${m.role}`}>{m.name.slice(0, 1).toUpperCase()}</span>)}
-          {p.members.length > 4 && <span>+{p.members.length - 4}</span>}
-        </div>
-        <button className="chrome-button" onClick={p.onManageMembers}>
-          <UsersIcon size={14} style={{ marginRight: 5, verticalAlign: 'middle' }} />
-          Colaboradores {p.members.length}
-        </button>
-        <button
-          className={`chrome-button ${rightPanelMode === 'team' && !isRightPanelCollapsed ? 'team-active-btn' : ''}`}
-          onClick={() => {
-            if (rightPanelMode === 'team' && !isRightPanelCollapsed) {
-              setIsRightPanelCollapsed(true)
-            } else {
-              setRightPanelMode('team')
-              setIsRightPanelCollapsed(false)
-            }
-          }}
-          title={rightPanelMode === 'team' && !isRightPanelCollapsed ? 'Colapsar espacio de equipo' : 'Abrir espacio colaborativo del equipo (Canales, Chat y ACODI)'}
-        >
-          <ChatIcon size={14} style={{ marginRight: 5, verticalAlign: 'middle' }} />
-          Espacio de Equipo
-        </button>
+        <details className="participants-menu" open={participantsOpen} onToggle={e => setParticipantsOpen(e.currentTarget.open)}>
+          <summary><UsersIcon size={15} />Participantes <span className="participant-count">{p.members.length}</span></summary>
+          <div className="participants-popover"><strong>Personas en el proyecto</strong>{p.members.map(m => <div className="participant-row" key={m.id}><span className="participant-avatar">{m.name.trim().slice(0, 1).toUpperCase()}</span><span><b>{m.name}</b><small>{m.email.toLowerCase() === p.currentUser.email.toLowerCase() ? 'Tú' : m.role}</small></span></div>)}{p.members.length === 0 && <small>Aún no hay participantes.</small>}<button type="button" onClick={p.onManageMembers}>Administrar participantes</button></div>
+        </details>
+        <button className="chrome-button coin-button" onClick={() => p.onAi('chat')} title="Abrir el asistente COIN"><SparklesIcon size={14} />COIN</button>
+        {p.online && !p.syncing && p.queueCount > 0 && p.savingStatus.includes('Conflicto') && <button type="button" className="header-retry-sync" onClick={p.onRetryPendingSync}>Revisar cambios</button>}
         <details className="project-actions">
           <summary title="Acciones del proyecto">•••</summary>
           <div className="project-menu">
@@ -257,12 +239,7 @@ function WorkspaceChromeContent(p: Props) {
             <details className="tool-module" open>
               <summary>Colaboración</summary>
               <div className="tool-module-content">
-                <button type="button" className={`tool-item ${p.commentMode ? 'selected' : ''}`} title="Activa el modo para crear una nota en cualquier punto del lienzo" onClick={p.onComments}>{p.commentMode ? 'Cancelar creación' : 'Crear comentario'}</button>
-                {p.selectedCommentId && <button type="button" className={`tool-item ${commentActionsOpen ? 'selected' : ''}`} title="Opciones para el comentario seleccionado" onClick={() => setCommentActionsOpen(open => !open)}>Opciones del comentario</button>}
-                {commentActionsOpen && p.selectedCommentId && <div className="comment-tool-actions" role="group" aria-label="Acciones del comentario seleccionado">
-                  <button type="button" onClick={() => { p.onEditSelectedComment(); setCommentActionsOpen(false) }}>Editar comentario</button>
-                  <button type="button" onClick={() => { p.onDeleteSelectedComment(); setCommentActionsOpen(false) }}>Eliminar comentario</button>
-                </div>}
+                <span className="collaboration-hint">Edición compartida y cambios sincronizados</span>
               </div>
             </details>
             <details className="tool-module generation-module" open>
@@ -377,7 +354,7 @@ function WorkspaceChromeContent(p: Props) {
                     onClick={() => setIsRightPanelCollapsed(false)}
                     title="Abrir panel lateral derecho"
                   >
-                    ◀ Abrir {rightPanelMode === 'team' ? 'Espacio de Equipo' : 'Inspector'}
+                    ◀ Abrir {rightPanelMode === 'team' ? 'Equipo' : 'Inspector'}
                   </button>
                 )}
                 <details className="more-tools">
@@ -385,7 +362,7 @@ function WorkspaceChromeContent(p: Props) {
                   <div className="project-menu">
                     <button onClick={p.onValidate}>Validar modelo</button>
                     <button onClick={p.onRelational}>Relacional y SQL</button>
-                    <button onClick={() => p.onAi('command')}>Asistente de modelado</button>
+                    <button onClick={() => p.onAi('command')}>Asistente COIN</button>
                     <button onClick={() => void openGeneration('backend')}>Generar software</button>
                     <button onClick={p.onVersions}>Versiones</button>
                     <button onClick={p.onActivity}>Bitácora de actividad</button>
@@ -427,10 +404,10 @@ function WorkspaceChromeContent(p: Props) {
                     type="button"
                     className={`right-tab-btn ${rightPanelMode === 'team' ? 'active' : ''}`}
                     onClick={() => setRightPanelMode('team')}
-                    title="Abrir espacio colaborativo con canales y ACODI"
+                    title="Abrir canales y chat del equipo"
                   >
                     <ChatIcon size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} />
-                    Espacio de Equipo
+                    Equipo
                   </button>
                   <button
                     type="button"
@@ -522,19 +499,6 @@ function WorkspaceChromeContent(p: Props) {
       )
     })()}
 
-    <footer className="workspace-footer">
-      <AgentSpeechControls />
-      <span className={p.online ? 'footer-good' : 'footer-warn'}>● {p.online ? 'Conexión disponible' : 'Sin conexión'}</span>
-      <span>{p.wsConnected ? 'Colaboración en vivo' : 'Presencia en tiempo real'}</span>
-      <span>{p.members.length} colaboradores</span>
-      <span>Diagrama: {p.diagram?.estado ?? 'Cargando'}</span>
-      <span className="footer-last">{p.queueCount ? `${p.queueCount} cambios locales pendientes` : p.savingStatus}</span>
-      {p.online && !p.syncing && p.queueCount > 0 && p.savingStatus.includes('Conflicto') && (
-        <button type="button" className="footer-retry-sync" onClick={p.onRetryPendingSync} title="Revisar los cambios locales y confirmar su reintento con la revisión actual del servidor">
-          Revisar y reintentar
-        </button>
-      )}
-    </footer>
   </div>
 }
 

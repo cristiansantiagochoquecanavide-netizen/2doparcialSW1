@@ -1,8 +1,8 @@
-export const mentionPattern = () => /(?<![\p{L}\p{N}_@.+-])@acodi(?![\p{L}\p{N}_@.+-])/iu
+export const mentionPattern = () => /(?<![\p{L}\p{N}_@.+-])@(?:coin|acodi)(?![\p{L}\p{N}_@.+-])/iu
 export function insertAcodiMention(text, cursor = text.length) {
   if (mentionPattern().test(text)) return { text, cursor: Math.max(0, Math.min(cursor, text.length)) }
   const position = Math.max(0, Math.min(cursor, text.length)), left = text.slice(0, position), right = text.slice(position)
-  const insertion = (left && !/\s$/.test(left) ? ' ' : '') + '@ACODI '
+  const insertion = (left && !/\s$/.test(left) ? ' ' : '') + '@COIN '
   return { text: left + insertion + right, cursor: left.length + insertion.length }
 }
 export function acodiError(code) {

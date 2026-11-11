@@ -159,7 +159,7 @@ test('controls render outside the team panel and the synthesis module has no net
   const workspace = await readFile(new URL('./WorkspaceChrome.tsx', import.meta.url), 'utf8')
   const chat = await readFile(new URL('./LiveTeamChatPanel.tsx', import.meta.url), 'utf8')
   assert.ok(!/\b(fetch|MediaRecorder|getUserMedia|RTCPeerConnection)\s*\(/.test(speech)); assert.ok(!speech.includes('/api/'))
-  assert.match(workspace, /workspace-footer[\s\S]*<AgentSpeechControls/); assert.match(chat, /speech\.receive\(frame\)/)
+  assert.doesNotMatch(workspace, /workspace-footer|<AgentSpeechControls/); assert.match(workspace, /<AgentSpeechProvider/); assert.match(chat, /speech\.receive\(frame\)/)
   const bundled = await build({ entryPoints: [fileURLToPath(new URL('./AgentSpeechUI.tsx', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react','react/jsx-runtime'] })
   const module = { exports: {} }; new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports)
   const html = renderToStaticMarkup(React.createElement(module.exports.AgentSpeechControls))
