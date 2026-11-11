@@ -236,12 +236,6 @@ function WorkspaceChromeContent(p: Props) {
               <span className="eyebrow">MODELADO MANUAL</span>
               <strong>Herramientas</strong>
             </div>
-            <details className="tool-module" open>
-              <summary>Colaboración</summary>
-              <div className="tool-module-content">
-                <span className="collaboration-hint">Edición compartida y cambios sincronizados</span>
-              </div>
-            </details>
             <details className="tool-module generation-module" open>
               <summary>Generación de software</summary>
               <div className="tool-module-content">
@@ -330,24 +324,6 @@ function WorkspaceChromeContent(p: Props) {
                 ) : (
                   <button className="quiet-button" onClick={p.onSelectAll}>Seleccionar todo</button>
                 )}
-                <button
-                  type="button"
-                  className="quiet-button organize-diagram-button"
-                  disabled={isEditingDisabled || p.arrangingDiagram || p.arrangeDisabled || p.elements.length < 2}
-                  onClick={p.onArrangeDiagram}
-                  title="Organizar diagrama"
-                  aria-label="Organizar diagrama"
-                >
-                  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="9" y="9" width="6" height="6" rx="1" />
-                    <rect x="2" y="3" width="5" height="5" rx="1" />
-                    <rect x="17" y="3" width="5" height="5" rx="1" />
-                    <rect x="2" y="16" width="5" height="5" rx="1" />
-                    <rect x="17" y="16" width="5" height="5" rx="1" />
-                    <path d="M7 6h2m6 0h2M4.5 8v5m15-5v5M7 18.5h2m6 0h2" />
-                  </svg>
-                  <span>{p.arrangingDiagram ? 'Organizando…' : 'Organizar'}</span>
-                </button>
                 {isRightPanelCollapsed && (
                   <button
                     className="quiet-button open-panel-btn"

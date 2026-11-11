@@ -196,7 +196,7 @@ function UmlDiamondMarker({ x, y, filled, color }: { x: number; y: number; fille
           width: 12,
           height: 12,
           transform: 'translate(-50%, -50%) rotate(45deg)',
-          background: filled ? color : '#ffffff',
+          background: filled ? color : '#0d121b',
           border: `2px solid ${color}`,
           boxSizing: 'border-box',
           pointerEvents: 'none',
@@ -1017,14 +1017,14 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         label: label || undefined,
         animated: isDependency,
         style: {
-          stroke: isComposition ? '#1e293b' : isAggregation ? '#0284c7' : '#475569',
+          stroke: isComposition ? '#b9a9ff' : isAggregation ? '#43d9c5' : '#c4cde0',
           strokeWidth: isComposition || isAggregation ? 2.5 : 2,
           strokeDasharray: isDependency ? '5,5' : undefined
         },
         markerEnd: isHeritage
-          ? { type: MarkerType.ArrowClosed, color: '#475569', width: 22, height: 22 }
+          ? { type: MarkerType.ArrowClosed, color: '#c4cde0', width: 22, height: 22 }
           : isDependency
-          ? { type: MarkerType.Arrow, color: '#475569' }
+          ? { type: MarkerType.Arrow, color: '#c4cde0' }
           : undefined,
         markerStart: undefined
       }
@@ -2779,7 +2779,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
               </div>
             ))}
           </ViewportPortal>
-          <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#cbd5e1" />
+          <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#31394a" />
           <Controls />
           {!historicalView && <MiniMap nodeStrokeWidth={3} zoomable pannable />}
         </ReactFlow>
