@@ -69,7 +69,7 @@ public class XmiService {
       String modelGuid = "MX_EAID_" + UUID.randomUUID().toString().replace("-", "_").toUpperCase();
 
       StringBuilder sb = new StringBuilder();
-      sb.append("<?xml version=\"1.0\" encoding=\"windows-1252\"?>\n");
+      sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
       sb.append("<XMI xmi.version=\"1.1\" xmlns:xmi=\"http://www.omg.org/XMI\" xmlns:UML=\"omg.org/UML1.3\" timestamp=\"2026-09-26 12:00:00\">\n");
       sb.append("  <XMI.header>\n");
       sb.append("    <XMI.documentation>\n");
@@ -207,13 +207,36 @@ public class XmiService {
               sb.append("                    <UML:TaggedValue tag=\"ea_localid\" value=\"").append(pos).append("\"/>\n");
               sb.append("                  </UML:ModelElement.taggedValue>\n");
 
-              if (!"void".equalsIgnoreCase(retType)) {
-                String paramGuid = "EAID_" + UUID.randomUUID().toString().replace("-", "_").toUpperCase();
+              // The editor stores parameters as "name: Type, other: Type".
+              // Export each one as an input UML Parameter so EA retains the signature.
+              String parameterText = m.path("parameters").asText("").trim();
+              boolean hasReturn = !"void".equalsIgnoreCase(retType);
+              if (!parameterText.isBlank() || hasReturn) {
                 sb.append("                  <UML:BehavioralFeature.parameter>\n");
+              }
+              if (!parameterText.isBlank()) {
+                for (String parameter : parameterText.split(",")) {
+                  String[] parts = parameter.trim().split(":", 2);
+                  String parameterName = parts[0].trim();
+                  if (parameterName.isBlank()) continue;
+                  String parameterType = parts.length > 1 && !parts[1].isBlank() ? parts[1].trim() : "String";
+                  String parameterGuid = "EAID_" + UUID.randomUUID().toString().replace("-", "_").toUpperCase();
+                  sb.append("                    <UML:Parameter name=\"").append(escapeXml(parameterName))
+                      .append("\" xmi.id=\"").append(parameterGuid).append("\" kind=\"in\">\n")
+                      .append("                      <UML:Parameter.type><UML:Classifier xmi.idref=\"").append(escapeXml(parameterType)).append("\"/></UML:Parameter.type>\n")
+                      .append("                      <UML:ModelElement.taggedValue><UML:TaggedValue tag=\"type\" value=\"").append(escapeXml(parameterType)).append("\"/></UML:ModelElement.taggedValue>\n")
+                      .append("                    </UML:Parameter>\n");
+                }
+              }
+
+              if (hasReturn) {
+                String paramGuid = "EAID_" + UUID.randomUUID().toString().replace("-", "_").toUpperCase();
                 sb.append("                    <UML:Parameter name=\"return\" xmi.id=\"").append(paramGuid).append("\" kind=\"return\">\n");
                 sb.append("                      <UML:Parameter.type><UML:Classifier xmi.idref=\"").append(escapeXml(retType)).append("\"/></UML:Parameter.type>\n");
                 sb.append("                      <UML:ModelElement.taggedValue><UML:TaggedValue tag=\"type\" value=\"").append(escapeXml(retType)).append("\"/></UML:ModelElement.taggedValue>\n");
                 sb.append("                    </UML:Parameter>\n");
+              }
+              if (!parameterText.isBlank() || hasReturn) {
                 sb.append("                  </UML:BehavioralFeature.parameter>\n");
               }
 

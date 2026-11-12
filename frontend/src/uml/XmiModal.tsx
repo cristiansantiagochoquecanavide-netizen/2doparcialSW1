@@ -2,7 +2,10 @@ import { useState } from 'react'
 import { DiagramFullView } from './types'
 import { ExchangeIcon, LockIcon, CheckIcon, AlertIcon } from './icons'
 import { AiModalShell } from './AiModalShell'
+import { exportXmiFile } from './xmiExport.mjs'
 import './xmi-modal.css'
+
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
 
 type Props = {
   projectId: string
@@ -43,22 +46,7 @@ export function XmiModal({
     try {
       setLoading(true)
       setStatusMessage({ type: 'success', text: 'Iniciando exportación EA XMI y creando bloqueo colaborativo en backend...' })
-      const res = await fetch(`/api/projects/${projectId}/diagrams/${diagramId}/xmi/export`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}))
-        throw new Error(b.message || 'Error al exportar archivo XMI.')
-      }
-      const blob = await res.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${diagramName.toLowerCase().replace(/\s+/g, '_')}.${ext}`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+      await exportXmiFile({ apiBase, projectId, diagramId, token, diagramName, ext })
       setStatusMessage({ type: 'success', text: '✅ Exportación completada exitosamente y bloqueo liberado.' })
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error al exportar XMI'
@@ -263,12 +251,12 @@ export function XmiModal({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
               <h4 style={{ margin: 0 }}>Exportar Diagrama Actual</h4>
               <span style={{ fontSize: '0.75rem', background: '#dbeafe', color: '#1d4ed8', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
-                {activeFormat === 'xmi' ? 'Formato OMG XMI 2.1 / EA 6.5' : 'Formato JSON'}
+                {activeFormat === 'xmi' ? 'Formato XMI 1.1 / XML de Enterprise Architect' : 'Formato JSON'}
               </span>
             </div>
             <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1rem' }}>
               {activeFormat === 'xmi'
-                ? 'Genera un documento XMI 2.1 / XML con la estructura completa de clases, interfaces, abstractas, enums, atributos, métodos, multiplicidades y geometría de lienzo compatible con Sparx Enterprise Architect.'
+                ? 'Genera un documento XMI 1.1 / XML con la estructura completa de clases, interfaces, abstractas, enums, atributos, métodos, multiplicidades y geometría de lienzo compatible con Sparx Enterprise Architect.'
                 : 'Exporta la estructura completa con coordenadas en lienzo, estilos, descripciones y multiplicidades en formato JSON.'}
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

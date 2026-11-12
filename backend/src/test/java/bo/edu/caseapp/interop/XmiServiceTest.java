@@ -157,6 +157,8 @@ class XmiServiceTest {
     String exportedXmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
     assertThat(exportedXmi).isNotBlank();
+    assertThat(exportedXmi).contains("xmi.version=\"1.1\"");
+    assertThat(exportedXmi).contains("encoding=\"UTF-8\"");
     assertThat(exportedXmi).contains("name=\"Cliente\"");
     assertThat(exportedXmi).contains("name=\"Pedido\"");
     assertThat(exportedXmi).contains("name=\"Producto\"");
@@ -281,6 +283,29 @@ class XmiServiceTest {
     assertThat(xmi).contains("<connector xmi:id=\"EAID_FFFFFFFF_FFFF_FFFF_FFFF_FFFFFFFFFFFF\"");
     assertThat(xmi).contains("type=\"EAID_11111111_1111_1111_1111_111111111111\">");
     assertThat(xmi).contains("ea_type=\"Realization\"");
+  }
+
+  @Test
+  void exportXmi_preservesMethodParametersAndReturnType() {
+    ElementoUML serviceElement = new ElementoUML(
+        diagram, TipoElementoUML.CLASE, "Servicio", 100.0, 100.0,
+        """
+        {"methods":[{"name":"crearPedido","visibility":"+","parameters":"clienteId: Long, urgente: Boolean","returnType":"Pedido"}]}
+        """
+    );
+    ReflectionTestUtils.setField(serviceElement, "id", UUID.randomUUID());
+    when(diagramRepo.findById(diagram.getId())).thenReturn(Optional.of(diagram));
+    when(elementRepo.findByDiagramaId(diagram.getId())).thenReturn(List.of(serviceElement));
+    when(relationRepo.findByDiagramaId(diagram.getId())).thenReturn(List.of());
+
+    String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
+
+    assertThat(xmi).contains("<UML:Parameter name=\"clienteId\"");
+    assertThat(xmi).contains("<UML:Parameter name=\"urgente\"");
+    assertThat(xmi).contains("tag=\"type\" value=\"Long\"");
+    assertThat(xmi).contains("tag=\"type\" value=\"Boolean\"");
+    assertThat(xmi).contains("<UML:Parameter name=\"return\"");
+    assertThat(xmi).contains("tag=\"type\" value=\"Pedido\"");
   }
 
   @Test
