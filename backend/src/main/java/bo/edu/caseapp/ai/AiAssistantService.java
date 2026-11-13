@@ -1949,8 +1949,8 @@ public class AiAssistantService {
         yield (multOrigen == null ? "1" : multOrigen) + " a " + (multDestino == null ? "*" : multDestino);
       }
       case "ELIMINAR_ELEMENTO" -> clase.isBlank() ? null : "Eliminar clase " + clase;
-      case "ELIMINAR_RELACION" -> source.isBlank() || target.isBlank()
-          ? null : "Eliminar relacion entre " + source + " y " + target;
+      case "ELIMINAR_RELACION" -> origen.isBlank() || destino.isBlank()
+          ? null : "Eliminar relacion entre " + origen + " y " + destino;
       default -> null;
     };
   }
