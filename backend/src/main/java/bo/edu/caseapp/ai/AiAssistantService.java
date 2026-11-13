@@ -121,7 +121,8 @@ public class AiAssistantService {
     User user = userRepo.findByEmailIgnoreCase(email)
         .orElseThrow(() -> new NotFoundException("Usuario no encontrado."));
 
-    if (!"LLM_CANONICAL".equals(request.resolvedSource()) && !looksLikeSqlDdl(request.command())) {
+    boolean attributeDeletion = isAttributeDeletionRequest(request.command());
+    if (!"LLM_CANONICAL".equals(request.resolvedSource()) && !looksLikeSqlDdl(request.command()) && !attributeDeletion) {
       List<String> interpretedCommands = interpretCommandWithGroq(projectId, diagramId, email, request.command());
       if (interpretedCommands != null && !interpretedCommands.isEmpty()) {
         CommandResponse lastResponse = null;
@@ -337,6 +338,42 @@ public class AiAssistantService {
           success = true;
         } else {
           message = "No hay ninguna clase en el diagrama a la cual agregar los atributos.";
+        }
+
+      } else if (isAttributeDeletionRequest(raw)) {
+        // A request scoped to an attribute must never be reinterpreted as deleting its class.
+        Matcher deleteAttribute = Pattern.compile(
+            "(?i)(?:eliminar|borrar|elimina|borra)\\s+(?:el\\s+)?(?:atributo|campo|propiedad)\\s+([\\p{L}\\p{N}_]+)(?:\\s+[\\p{L}\\p{N}_]+)?\\s+(?:de\\s+|en\\s+)?(?:la\\s+)?clase\\s+([\\p{L}\\p{N}_]+)")
+            .matcher(raw);
+        if (deleteAttribute.find()) {
+          String requestedAttribute = deleteAttribute.group(1);
+          String className = deleteAttribute.group(2);
+          List<ElementoUML> elements = elementRepo.findByDiagramaId(diagramId);
+          Optional<ElementoUML> classElement = elements.stream()
+              .filter(e -> e.getNombre().equalsIgnoreCase(className)).findFirst();
+          if (classElement.isEmpty()) {
+            message = "No se encontró la clase «" + className + ". No se eliminó ningún elemento.";
+          } else {
+            ElementoUML target = classElement.get();
+            ObjectNode properties = (ObjectNode) objectMapper.readTree(target.getPropiedadesJson());
+            JsonNode attributesNode = properties.path("attributes");
+            int attributeIndex = findAttributeIndex(attributesNode, requestedAttribute);
+            if (attributeIndex < 0) {
+              message = "No se encontró el atributo «" + requestedAttribute + "» en «" + className
+                  + ". No se eliminó la clase ni sus relaciones.";
+            } else {
+              String removedAttributeName = attributesNode.get(attributeIndex).path("name").asText(requestedAttribute);
+              ((ArrayNode) attributesNode).remove(attributeIndex);
+              target.setPropiedadesJson(properties.toString());
+              elementRepo.save(target);
+              actionType = "ELIMINAR_ATRIBUTO";
+              message = "Se eliminó el atributo «" + removedAttributeName
+                  + "» de la clase «" + className + ".";
+              success = true;
+            }
+          }
+        } else {
+          message = "Indica el atributo y la clase, por ejemplo: «Borra el atributo idCliente de la clase Cliente». No se eliminó ningún elemento.";
         }
 
       } else if (normalized.matches(".*(eliminar|borrar|elimina|borra)\\s+.*")) {
@@ -1919,6 +1956,45 @@ public class AiAssistantService {
 
   private boolean looksLikeSqlDdl(String command) {
     return command != null && command.trim().toLowerCase(Locale.ROOT).matches("(?s).*\\b(create|alter|drop)\\s+table\\b.*");
+  }
+
+  private boolean isAttributeDeletionRequest(String command) {
+    if (command == null) return false;
+    String normalized = Normalizer.normalize(command, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
+    return normalized.matches("(?is).*\\b(?:eliminar|borrar|elimina|borra)\\s+(?:el\\s+)?(?:atributo|campo|propiedad)\\b.*");
+  }
+
+  private int findAttributeIndex(JsonNode attributes, String requestedName) {
+    if (!attributes.isArray()) return -1;
+    String requested = normalizeIdentifier(requestedName);
+    List<Integer> close = new ArrayList<>();
+    for (int i = 0; i < attributes.size(); i++) {
+      String name = attributes.get(i).path("name").asText("");
+      String candidate = normalizeIdentifier(name);
+      if (candidate.equals(requested)) return i;
+      if (editDistanceAtMostOne(candidate, requested)) close.add(i);
+    }
+    if (close.size() == 1) return close.get(0);
+    return -1;
+  }
+
+  private String normalizeIdentifier(String value) {
+    return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFD)
+        .replaceAll("\\p{M}", "").replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT);
+  }
+
+  private boolean editDistanceAtMostOne(String left, String right) {
+    if (left.equals(right)) return true;
+    if (Math.abs(left.length() - right.length()) > 1) return false;
+    int i = 0, j = 0, edits = 0;
+    while (i < left.length() && j < right.length()) {
+      if (left.charAt(i) == right.charAt(j)) { i++; j++; continue; }
+      if (++edits > 1) return false;
+      if (left.length() > right.length()) i++;
+      else if (right.length() > left.length()) j++;
+      else { i++; j++; }
+    }
+    return edits + (i < left.length() || j < right.length() ? 1 : 0) <= 1;
   }
 
 
