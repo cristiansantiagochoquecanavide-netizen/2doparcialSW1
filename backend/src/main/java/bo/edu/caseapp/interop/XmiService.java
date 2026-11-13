@@ -147,7 +147,8 @@ public class XmiService {
             for (JsonNode a : attrs) {
               String name = a.path("name").asText().trim();
               if (name.isBlank()) continue;
-              String attrGuid = "EAID_" + UUID.randomUUID().toString().replace("-", "_").toUpperCase();
+              UUID attrUuid = attributeUuid(el.getId(), a, pos);
+              String attrGuid = toEaId(attrUuid);
               String rawType = a.path("type").asText("String").trim();
               if (rawType.isBlank()) rawType = "String";
               String vis = a.path("visibility").asText("+");
@@ -171,8 +172,7 @@ public class XmiService {
               sb.append("                    <UML:TaggedValue tag=\"position\" value=\"").append(pos).append("\"/>\n");
               sb.append("                    <UML:TaggedValue tag=\"lowerBound\" value=\"1\"/>\n");
               sb.append("                    <UML:TaggedValue tag=\"upperBound\" value=\"1\"/>\n");
-              sb.append("                    <UML:TaggedValue tag=\"ea_guid\" value=\"").append(attrGuid).append("\"/>\n");
-              sb.append("                    <UML:TaggedValue tag=\"ea_localid\" value=\"").append(pos).append("\"/>\n");
+              sb.append("                    <UML:TaggedValue tag=\"ea_guid\" value=\"").append("{").append(attrUuid).append("}").append("\"/>\n");
               sb.append("                  </UML:ModelElement.taggedValue>\n");
               sb.append("                </UML:Attribute>\n");
               pos++;
@@ -321,6 +321,8 @@ public class XmiService {
           sb.append("                  </UML:AssociationEnd.multiplicity>\n");
           sb.append("                  <UML:AssociationEnd.participant><UML:Class xmi.idref=\"").append(origGuid).append("\"/></UML:AssociationEnd.participant>\n");
           sb.append("                  <UML:ModelElement.taggedValue>\n");
+          sb.append("                    <UML:TaggedValue tag=\"lowerBound\" value=\"").append(escapeXml(boundsOrig[0])).append("\"/>\n");
+          sb.append("                    <UML:TaggedValue tag=\"upperBound\" value=\"").append(escapeXml(boundsOrig[1])).append("\"/>\n");
           sb.append("                    <UML:TaggedValue tag=\"sourcestyle\" value=\"Navigable=Unspecified;Owned=0;\"/>\n");
           sb.append("                    <UML:TaggedValue tag=\"ea_end\" value=\"source\"/>\n");
           sb.append("                  </UML:ModelElement.taggedValue>\n");
@@ -335,6 +337,8 @@ public class XmiService {
           sb.append("                  </UML:AssociationEnd.multiplicity>\n");
           sb.append("                  <UML:AssociationEnd.participant><UML:Class xmi.idref=\"").append(destGuid).append("\"/></UML:AssociationEnd.participant>\n");
           sb.append("                  <UML:ModelElement.taggedValue>\n");
+          sb.append("                    <UML:TaggedValue tag=\"lowerBound\" value=\"").append(escapeXml(boundsDest[0])).append("\"/>\n");
+          sb.append("                    <UML:TaggedValue tag=\"upperBound\" value=\"").append(escapeXml(boundsDest[1])).append("\"/>\n");
           sb.append("                    <UML:TaggedValue tag=\"deststyle\" value=\"Navigable=Unspecified;Owned=0;\"/>\n");
           sb.append("                    <UML:TaggedValue tag=\"ea_end\" value=\"target\"/>\n");
           sb.append("                  </UML:ModelElement.taggedValue>\n");
@@ -406,7 +410,7 @@ public class XmiService {
       sb.append("  <XMI.extensions xmi.extender=\"Enterprise Architect 2.5\">\n");
       sb.append("    <EAModel.paramSub/>\n");
       sb.append("  </XMI.extensions>\n");
-      appendEnterpriseArchitectConnectors(sb, relations);
+      appendEnterpriseArchitectConnectors(sb, elements, propsMap, pkgGuid, diagram.getNombre(), relations);
       sb.append("</XMI>\n");
 
       return sb.toString();
@@ -451,9 +455,61 @@ public class XmiService {
         .append("              </UML:ModelElement.taggedValue>\n");
   }
 
-  private void appendEnterpriseArchitectConnectors(StringBuilder sb, List<RelacionUML> relations) {
-    sb.append("  <xmi:Extension extender=\"Enterprise Architect\">\n")
-        .append("    <connectors>\n");
+  private void appendEnterpriseArchitectConnectors(StringBuilder sb, List<ElementoUML> elements,
+                                                    Map<UUID, JsonNode> propsMap, String packageGuid,
+                                                    String packageName, List<RelacionUML> relations) {
+    sb.append("  <xmi:Extension extender=\"Enterprise Architect\" extenderID=\"6.5\">\n")
+        .append("    <elements>\n");
+    int elementLocalId = 1;
+    for (ElementoUML element : elements) {
+      String elementGuid = toEaId(element.getId());
+      String eaType = switch (element.getTipoElemento()) {
+        case INTERFAZ -> "Interface";
+        case ENUMERACION -> "Enumeration";
+        default -> "Class";
+      };
+      JsonNode root = propsMap.get(element.getId());
+      JsonNode attrs = root == null ? null : root.path("attributes");
+      sb.append("      <element xmi:idref=\"").append(elementGuid).append("\" xmi:type=\"UML:").append(eaType).append("\" name=\"")
+          .append(escapeXml(element.getNombre())).append("\" scope=\"public\">\n")
+          .append("        <model package=\"").append(packageGuid).append("\" tpos=\"").append(elementLocalId)
+          .append("\" ea_localid=\"").append(elementLocalId).append("\" ea_eleType=\"element\"/>\n")
+          .append("        <properties isSpecification=\"false\" sType=\"").append(eaType)
+          .append("\" nType=\"0\" scope=\"public\"/>\n")
+          .append("        <project author=\"Herramienta CASE\" version=\"1.0\" phase=\"1.0\" complexity=\"1\" status=\"Proposed\"/>\n")
+          .append("        <code gentype=\"Java\"/>\n")
+          .append("        <style appearance=\"BackColor=-1;BorderColor=-1;BorderWidth=-1;FontColor=-1;VSwimLanes=1;HSwimLanes=1;BorderStyle=0;\"/>\n");
+      if (attrs != null && attrs.isArray()) {
+        sb.append("        <attributes>\n");
+        int position = 0;
+        for (JsonNode attr : attrs) {
+          String name = attr.path("name").asText().trim();
+          if (name.isBlank()) continue;
+          UUID attrUuid = attributeUuid(element.getId(), attr, position);
+          String attrGuid = toEaId(attrUuid);
+          String rawType = attr.path("type").asText("String").trim();
+          if (rawType.isBlank()) rawType = "String";
+          String visibility = eaVisibility(attr.path("visibility").asText("+"));
+          int attributeLocalId = elementLocalId + position + 1;
+          sb.append("          <attribute xmi:idref=\"").append(attrGuid).append("\" xmi:type=\"UML:Attribute\" name=\"")
+              .append(escapeXml(name)).append("\" scope=\"").append(visibility).append("\">\n")
+              .append("            <initial/>\n")
+              .append("            <model ea_localid=\"").append(attributeLocalId).append("\" ea_guid=\"{")
+              .append(attrUuid).append("}\"/>\n")
+              .append("            <properties type=\"").append(escapeXml(rawType)).append("\" scope=\"").append(visibility).append("\"/>\n")
+              .append("            <coords ordered=\"0\" scale=\"0\"/>\n")
+              .append("            <containment containment=\"Not Specified\" position=\"").append(position).append("\"/>\n")
+              .append("            <stereotype/>\n          </attribute>\n");
+          position++;
+        }
+        sb.append("        </attributes>\n");
+      }
+      sb.append("        <tags/>\n        <xrefs/>\n")
+          .append("        <extendedProperties tagged=\"0\" package_name=\"").append(escapeXml(packageName))
+          .append("\"/>\n      </element>\n");
+      elementLocalId += 1 + (attrs != null && attrs.isArray() ? attrs.size() : 0);
+    }
+    sb.append("    </elements>\n    <connectors>\n");
     for (RelacionUML rel : relations) {
       if (rel.getElementoOrigen() == null || rel.getElementoDestino() == null) continue;
       String relGuid = "EAID_" + rel.getId().toString().replace("-", "_").toUpperCase();
@@ -469,18 +525,65 @@ public class XmiService {
       };
       String sourceAggregation = rel.getTipoRelacion() == TipoRelacionUML.COMPOSICION ? "composite" :
           rel.getTipoRelacion() == TipoRelacionUML.AGREGACION ? "shared" : "none";
-      String sourceMultiplicity = rel.getMultiplicidadOrigen() == null ? "" : rel.getMultiplicidadOrigen();
-      String targetMultiplicity = rel.getMultiplicidadDestino() == null ? "" : rel.getMultiplicidadDestino();
       String name = rel.getNombreRelacion() == null ? "" : rel.getNombreRelacion();
-      sb.append("      <connector xmi:id=\"").append(relGuid).append("\">\n")
-          .append("        <properties name=\"").append(escapeXml(name)).append("\" ea_type=\"").append(eaType).append("\"/>\n")
-          .append("        <source xmi:idref=\"").append(origGuid).append("\"><type multiplicity=\"").append(escapeXml(sourceMultiplicity))
-          .append("\" aggregation=\"").append(sourceAggregation).append("\"/></source>\n")
-          .append("        <target xmi:idref=\"").append(destGuid).append("\"><type multiplicity=\"").append(escapeXml(targetMultiplicity))
-          .append("\" aggregation=\"none\"/></target>\n")
+      String sourceName = rel.getElementoOrigen().getNombre();
+      String targetName = rel.getElementoDestino().getNombre();
+      String sourceRoleMultiplicity = normalizeMultiplicity(rel.getMultiplicidadOrigen());
+      String targetRoleMultiplicity = normalizeMultiplicity(rel.getMultiplicidadDestino());
+      String direction = rel.getTipoRelacion() == TipoRelacionUML.DEPENDENCIA || rel.getTipoRelacion() == TipoRelacionUML.REALIZACION
+          ? "Source -&gt; Destination" : "Unspecified";
+      sb.append("      <connector xmi:idref=\"").append(relGuid).append("\">\n")
+         .append("        <properties name=\"").append(escapeXml(name)).append("\" ea_type=\"").append(eaType)
+         .append("\" direction=\"").append(direction).append("\"/>\n")
+          .append("        <source xmi:idref=\"").append(origGuid).append("\">\n")
+          .append("          <model type=\"Class\" name=\"").append(escapeXml(sourceName)).append("\"/>\n")
+          .append("          <role visibility=\"Public\" targetScope=\"instance\"/>\n")
+          .append("          <type multiplicity=\"").append(escapeXml(sourceRoleMultiplicity)).append("\" aggregation=\"").append(sourceAggregation).append("\" containment=\"Unspecified\"/>\n")
+          .append("          <constraints/><modifiers isOrdered=\"false\" changeable=\"none\" isNavigable=\"true\"/>\n")
+          .append("          <style value=\"Union=0;Derived=0;AllowDuplicates=0;Owned=0;Navigable=Navigable;\"/>\n")
+          .append("          <documentation/><xrefs/><tags/>\n        </source>\n")
+          .append("        <target xmi:idref=\"").append(destGuid).append("\">\n")
+          .append("          <model type=\"Class\" name=\"").append(escapeXml(targetName)).append("\"/>\n")
+          .append("          <role visibility=\"Public\" targetScope=\"instance\"/>\n")
+          .append("          <type multiplicity=\"").append(escapeXml(targetRoleMultiplicity)).append("\" aggregation=\"none\" containment=\"Unspecified\"/>\n")
+          .append("          <constraints/><modifiers isOrdered=\"false\" changeable=\"none\" isNavigable=\"true\"/>\n")
+          .append("          <style value=\"Union=0;Derived=0;AllowDuplicates=0;Owned=0;Navigable=Navigable;\"/>\n")
+          .append("          <documentation/><xrefs/><tags/>\n        </target>\n")
+          .append("        <model/>\n")
+          .append("        <appearance linemode=\"3\" linecolor=\"-1\" linewidth=\"0\"/>\n")
+          .append("        <labels mt=\"").append(escapeXml(name)).append("\"/>\n")
           .append("      </connector>\n");
     }
     sb.append("    </connectors>\n  </xmi:Extension>\n");
+  }
+
+  private UUID attributeUuid(UUID classId, JsonNode attribute, int position) {
+    String sourceId = attribute.path("id").asText("").trim();
+    try {
+      return UUID.fromString(sourceId);
+    } catch (IllegalArgumentException ignored) {
+      String name = attribute.path("name").asText("");
+      return UUID.nameUUIDFromBytes((classId + ":" + sourceId + ":" + name + ":" + position)
+          .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+  }
+
+  private String toEaId(UUID id) {
+    return "EAID_" + id.toString().replace("-", "_").toUpperCase(Locale.ROOT);
+  }
+
+  private String eaVisibility(String visibility) {
+    return switch (visibility) {
+      case "-" -> "Private";
+      case "#" -> "Protected";
+      case "~" -> "Package";
+      default -> "Public";
+    };
+  }
+
+  private String normalizeMultiplicity(String multiplicity) {
+    if (multiplicity == null || multiplicity.isBlank()) return "1";
+    return multiplicity.trim();
   }
 
   public DiagramFullView importXmi(UUID projectId, UUID diagramId, String email, String xmlContent) {

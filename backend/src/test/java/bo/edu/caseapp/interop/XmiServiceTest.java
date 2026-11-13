@@ -278,11 +278,43 @@ class XmiServiceTest {
     assertThat(xmi).contains("isAbstract=\"true\"");
     assertThat(xmi).contains("<UML:Dependency");
     assertThat(xmi).contains("<UML:Abstraction");
-    assertThat(xmi).contains("<xmi:Extension extender=\"Enterprise Architect\">");
-    assertThat(xmi).contains("<connector xmi:id=\"EAID_DDDDDDDD_DDDD_DDDD_DDDD_DDDDDDDDDDDD\"");
-    assertThat(xmi).contains("<connector xmi:id=\"EAID_FFFFFFFF_FFFF_FFFF_FFFF_FFFFFFFFFFFF\"");
+    assertThat(xmi).contains("<xmi:Extension extender=\"Enterprise Architect\" extenderID=\"6.5\">");
+    assertThat(xmi).contains("<connector xmi:idref=\"EAID_DDDDDDDD_DDDD_DDDD_DDDD_DDDDDDDDDDDD\"");
+    assertThat(xmi).contains("<connector xmi:idref=\"EAID_FFFFFFFF_FFFF_FFFF_FFFF_FFFFFFFFFFFF\"");
     assertThat(xmi).contains("type=\"EAID_11111111_1111_1111_1111_111111111111\">");
     assertThat(xmi).contains("ea_type=\"Realization\"");
+  }
+
+  @Test
+  void exportXmi_preservesAttributeOrderAndEnterpriseArchitectMultiplicityMetadata() {
+    ElementoUML pago = new ElementoUML(
+        diagram, TipoElementoUML.CLASE, "Pago", 100.0, 100.0,
+        """
+        {"attributes":[
+          {"id":"a-pago","visibility":"-","name":"idPago","type":"int"},
+          {"id":"a-cuota","visibility":"-","name":"idCuota","type":"int"}
+        ],"methods":[]}
+        """
+    );
+    ElementoUML cuota = new ElementoUML(diagram, TipoElementoUML.CLASE, "Cuota", 400.0, 100.0, "{}");
+    ReflectionTestUtils.setField(pago, "id", UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+    ReflectionTestUtils.setField(cuota, "id", UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+    RelacionUML pagoCuota = new RelacionUML(
+        diagram, cuota, pago, "recibe", TipoRelacionUML.ASOCIACION, "1", "0..*");
+    ReflectionTestUtils.setField(pagoCuota, "id", UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc"));
+
+    when(diagramRepo.findById(diagram.getId())).thenReturn(Optional.of(diagram));
+    when(elementRepo.findByDiagramaId(diagram.getId())).thenReturn(List.of(pago, cuota));
+    when(relationRepo.findByDiagramaId(diagram.getId())).thenReturn(List.of(pagoCuota));
+
+    String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
+
+    assertThat(xmi.indexOf("<UML:Attribute name=\"idPago\"")).isLessThan(xmi.indexOf("<UML:Attribute name=\"idCuota\""));
+    assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"0\"/>");
+    assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"1\"/>");
+    assertThat(xmi).contains("<connector xmi:idref=\"EAID_CCCCCCCC_CCCC_CCCC_CCCC_CCCCCCCCCCCC\"");
+    assertThat(xmi).contains("<type multiplicity=\"1\" aggregation=\"none\" containment=\"Unspecified\"/>");
+    assertThat(xmi).contains("<type multiplicity=\"0..*\" aggregation=\"none\" containment=\"Unspecified\"/>");
   }
 
   @Test
@@ -694,10 +726,10 @@ class XmiServiceTest {
     assertThat(xmi).contains("geometry=\"SX=0;SY=0;EX=0;EY=0;Path=;\"");
 
     // 5. Validar conectores en la extensión
-    assertThat(xmi).contains("<xmi:Extension extender=\"Enterprise Architect\">");
+    assertThat(xmi).contains("<xmi:Extension extender=\"Enterprise Architect\" extenderID=\"6.5\">");
     assertThat(xmi).contains("<connectors>");
-    assertThat(xmi).contains("<connector xmi:id=\"");
-    assertThat(xmi).contains("<properties name=\"realiza\" ea_type=\"Association\"/>");
+    assertThat(xmi).contains("<connector xmi:idref=\"");
+    assertThat(xmi).contains("<properties name=\"realiza\" ea_type=\"Association\" direction=\"");
     assertThat(xmi).contains("multiplicity=\"1..1\"");
     assertThat(xmi).contains("multiplicity=\"0..*\"");
     assertThat(xmi).contains("multiplicity=\"1..*\"");
