@@ -157,7 +157,7 @@ public class XmiService {
             // resulting EA list matches the editor's original order.
             for (int attrIndex = attrs.size() - 1; attrIndex >= 0; attrIndex--) {
               JsonNode a = attrs.get(attrIndex);
-              int pos = attrs.size() - 1 - attrIndex;
+              int pos = attrIndex;
               String name = a.path("name").asText().trim();
               if (name.isBlank()) continue;
               UUID attrUuid = attributeUuid(el.getId(), a, pos);
@@ -899,7 +899,7 @@ public class XmiService {
         sb.append("        <attributes>\n");
         for (int attrIndex = attrs.size() - 1; attrIndex >= 0; attrIndex--) {
           JsonNode attr = attrs.get(attrIndex);
-          int position = attrs.size() - 1 - attrIndex;
+          int position = attrIndex;
           String name = attr.path("name").asText().trim();
           if (name.isBlank()) continue;
           UUID attrUuid = attributeUuid(element.getId(), attr, position);

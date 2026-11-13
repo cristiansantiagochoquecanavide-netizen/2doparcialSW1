@@ -316,10 +316,12 @@ class XmiServiceTest {
     // and its extension positions must describe the order EA should store.
     assertThat(xmi.indexOf("name=\"idCuota\"")).isLessThan(xmi.indexOf("name=\"idPago\""));
     String eaAttributes = xmi.substring(xmi.indexOf("<attributes>"), xmi.indexOf("</attributes>"));
-    String cuotaMetadata = eaAttributes.substring(eaAttributes.indexOf("name=\"idCuota\""));
-    String pagoMetadata = eaAttributes.substring(eaAttributes.indexOf("name=\"idPago\""));
-    assertThat(cuotaMetadata.indexOf("position=\"0\"")).isGreaterThan(-1);
-    assertThat(pagoMetadata.indexOf("position=\"1\"")).isGreaterThan(-1);
+    int cuotaStart = eaAttributes.indexOf("name=\"idCuota\"");
+    int pagoStart = eaAttributes.indexOf("name=\"idPago\"");
+    String cuotaMetadata = eaAttributes.substring(cuotaStart, eaAttributes.indexOf("</attribute>", cuotaStart));
+    String pagoMetadata = eaAttributes.substring(pagoStart, eaAttributes.indexOf("</attribute>", pagoStart));
+    assertThat(cuotaMetadata).contains("position=\"1\"");
+    assertThat(pagoMetadata).contains("position=\"0\"");
     assertThat(xmi).contains("<lowerValue").contains("xmi:type=\"uml:LiteralInteger\"");
     assertThat(xmi).contains("<upperValue").contains("xmi:type=\"uml:LiteralUnlimitedNatural\"");
     assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"0\"/>");
