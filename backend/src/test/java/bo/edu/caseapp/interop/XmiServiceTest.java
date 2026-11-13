@@ -730,6 +730,8 @@ class XmiServiceTest {
 
     // 5. Validar conectores en la extensión
     assertThat(xmi).contains("<xmi:Extension extender=\"Enterprise Architect\" extenderID=\"6.5\">");
+    assertThat(xmi).contains("xmi:idref=\"EAPK_").contains("ea_eleType=\"package\"")
+        .contains("<packageproperties version=\"1.0\"/>");
     assertThat(xmi).contains("<model localID=\"1\"")
         .contains("owner=\"EAPK_").contains("package=\"EAPK_");
     assertThat(xmi).contains("<properties name=\"").contains("type=\"Logical\"");

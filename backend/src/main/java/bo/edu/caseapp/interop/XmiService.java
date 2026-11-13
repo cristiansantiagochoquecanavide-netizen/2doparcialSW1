@@ -475,6 +475,7 @@ public class XmiService {
         Element extension = (Element) result.importNode(oldExtension, true);
         remapXmiNamespace(extension);
         root.appendChild(extension);
+        appendXmi21PackageExtension(result, extension, legacy.getDocumentElement());
         appendXmi21DiagramExtension(result, extension, legacy.getDocumentElement());
       }
 
@@ -683,6 +684,73 @@ public class XmiService {
         elements.appendChild(element);
       }
     }
+  }
+
+  private void appendXmi21PackageExtension(Document doc, Element extension, Element legacyRoot) {
+    Element oldPackage = firstDescendant(legacyRoot, "UML:Package");
+    Element elements = firstElement(extension, "elements");
+    if (oldPackage == null || elements == null) return;
+
+    String packageId = getAttr(oldPackage, "xmi.id", "xmi:id");
+    NodeList existing = elements.getElementsByTagName("element");
+    for (int i = 0; i < existing.getLength(); i++) {
+      if (packageId.equals(getAttr((Element) existing.item(i), "xmi:idref"))) return;
+    }
+
+    // EA expects the imported package itself in its vendor extension as well
+    // as in the UML model. Without this package record it may import all
+    // classifiers but silently discard the package's diagram records.
+    Element packageEntry = doc.createElement("element");
+    packageEntry.setAttribute("xmi:idref", packageId);
+    packageEntry.setAttribute("xmi:type", "uml:Package");
+    packageEntry.setAttribute("name", getAttr(oldPackage, "name"));
+    packageEntry.setAttribute("scope", "public");
+    elements.insertBefore(packageEntry, elements.getFirstChild());
+
+    String eaPackageId = packageId.startsWith("EAPK_")
+        ? "EAID_" + packageId.substring("EAPK_".length()) : packageId;
+    Element model = doc.createElement("model");
+    model.setAttribute("package2", eaPackageId);
+    model.setAttribute("package", packageId);
+    model.setAttribute("tpos", "0");
+    model.setAttribute("ea_localid", "0");
+    model.setAttribute("ea_eleType", "package");
+    packageEntry.appendChild(model);
+
+    Element properties = doc.createElement("properties");
+    properties.setAttribute("isSpecification", "false");
+    properties.setAttribute("sType", "Package");
+    properties.setAttribute("nType", "0");
+    properties.setAttribute("scope", "public");
+    packageEntry.appendChild(properties);
+
+    Element project = doc.createElement("project");
+    project.setAttribute("author", "Proyecto CASE");
+    project.setAttribute("version", "1.0");
+    project.setAttribute("phase", "1.0");
+    project.setAttribute("complexity", "1");
+    project.setAttribute("status", "Proposed");
+    packageEntry.appendChild(project);
+    packageEntry.appendChild(doc.createElement("code"));
+    packageEntry.appendChild(doc.createElement("style"));
+    packageEntry.appendChild(doc.createElement("tags"));
+    packageEntry.appendChild(doc.createElement("xrefs"));
+
+    Element extendedProperties = doc.createElement("extendedProperties");
+    extendedProperties.setAttribute("tagged", "0");
+    extendedProperties.setAttribute("package_name", getAttr(oldPackage, "name"));
+    packageEntry.appendChild(extendedProperties);
+    Element packageProperties = doc.createElement("packageproperties");
+    packageProperties.setAttribute("version", "1.0");
+    packageEntry.appendChild(packageProperties);
+    packageEntry.appendChild(doc.createElement("paths"));
+    Element flags = doc.createElement("flags");
+    flags.setAttribute("iscontrolled", "FALSE");
+    flags.setAttribute("isprotected", "FALSE");
+    flags.setAttribute("usedtd", "FALSE");
+    flags.setAttribute("logxml", "FALSE");
+    flags.setAttribute("packageFlags", "isModel=0;");
+    packageEntry.appendChild(flags);
   }
 
   private void appendDiagramTaggedValue(Document doc, Element oldDiagram, Element diagram,
