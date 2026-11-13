@@ -152,8 +152,11 @@ public class XmiService {
         if (hasAttrs || hasMethods) {
           sb.append("              <UML:Classifier.feature>\n");
           if (hasAttrs) {
-            int pos = 0;
-            for (JsonNode a : attrs) {
+            // EA inserts XMI attributes in reverse encounter order. Emit them backwards
+            // while keeping their original positions so EA displays the source order.
+            for (int attrIndex = attrs.size() - 1; attrIndex >= 0; attrIndex--) {
+              JsonNode a = attrs.get(attrIndex);
+              int pos = attrIndex;
               String name = a.path("name").asText().trim();
               if (name.isBlank()) continue;
               UUID attrUuid = attributeUuid(el.getId(), a, pos);
@@ -184,7 +187,6 @@ public class XmiService {
               sb.append("                    <UML:TaggedValue tag=\"ea_guid\" value=\"").append("{").append(attrUuid).append("}").append("\"/>\n");
               sb.append("                  </UML:ModelElement.taggedValue>\n");
               sb.append("                </UML:Attribute>\n");
-              pos++;
             }
           }
 
@@ -894,8 +896,9 @@ public class XmiService {
           .append("        <style appearance=\"BackColor=-1;BorderColor=-1;BorderWidth=-1;FontColor=-1;VSwimLanes=1;HSwimLanes=1;BorderStyle=0;\"/>\n");
       if (attrs != null && attrs.isArray()) {
         sb.append("        <attributes>\n");
-        int position = 0;
-        for (JsonNode attr : attrs) {
+        for (int attrIndex = attrs.size() - 1; attrIndex >= 0; attrIndex--) {
+          JsonNode attr = attrs.get(attrIndex);
+          int position = attrIndex;
           String name = attr.path("name").asText().trim();
           if (name.isBlank()) continue;
           UUID attrUuid = attributeUuid(element.getId(), attr, position);
@@ -913,7 +916,6 @@ public class XmiService {
               .append("            <coords ordered=\"0\" scale=\"0\"/>\n")
               .append("            <containment containment=\"Not Specified\" position=\"").append(position).append("\"/>\n")
               .append("            <stereotype/>\n          </attribute>\n");
-          position++;
         }
         sb.append("        </attributes>\n");
       }

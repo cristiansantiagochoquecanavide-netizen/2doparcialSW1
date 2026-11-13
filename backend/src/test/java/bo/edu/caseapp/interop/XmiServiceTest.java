@@ -289,7 +289,7 @@ class XmiServiceTest {
   }
 
   @Test
-  void exportXmi_preservesAttributeOrderAndEnterpriseArchitectMultiplicityMetadata() {
+  void exportXmiCompensatesForEnterpriseArchitectAttributeImportOrder() {
     ElementoUML pago = new ElementoUML(
         diagram, TipoElementoUML.CLASE, "Pago", 100.0, 100.0,
         """
@@ -312,7 +312,9 @@ class XmiServiceTest {
 
     String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
-    assertThat(xmi.indexOf("name=\"idPago\"")).isLessThan(xmi.indexOf("name=\"idCuota\""));
+    // EA imports attributes in reverse encounter order, so the XMI sequence is reversed
+    // while the original position metadata remains attached to each attribute.
+    assertThat(xmi.indexOf("name=\"idCuota\"")).isLessThan(xmi.indexOf("name=\"idPago\""));
     assertThat(xmi).contains("<lowerValue").contains("xmi:type=\"uml:LiteralInteger\"");
     assertThat(xmi).contains("<upperValue").contains("xmi:type=\"uml:LiteralUnlimitedNatural\"");
     assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"0\"/>");
