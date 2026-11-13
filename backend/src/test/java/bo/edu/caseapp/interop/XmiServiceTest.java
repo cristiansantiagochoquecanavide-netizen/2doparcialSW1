@@ -313,8 +313,13 @@ class XmiServiceTest {
     String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
     // EA imports attributes in reverse encounter order, so the XMI sequence is reversed
-    // while the original position metadata remains attached to each attribute.
+    // and its extension positions must describe the order EA should store.
     assertThat(xmi.indexOf("name=\"idCuota\"")).isLessThan(xmi.indexOf("name=\"idPago\""));
+    String eaAttributes = xmi.substring(xmi.indexOf("<attributes>"), xmi.indexOf("</attributes>"));
+    String cuotaMetadata = eaAttributes.substring(eaAttributes.indexOf("name=\"idCuota\""));
+    String pagoMetadata = eaAttributes.substring(eaAttributes.indexOf("name=\"idPago\""));
+    assertThat(cuotaMetadata.indexOf("position=\"0\"")).isGreaterThan(-1);
+    assertThat(pagoMetadata.indexOf("position=\"1\"")).isGreaterThan(-1);
     assertThat(xmi).contains("<lowerValue").contains("xmi:type=\"uml:LiteralInteger\"");
     assertThat(xmi).contains("<upperValue").contains("xmi:type=\"uml:LiteralUnlimitedNatural\"");
     assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"0\"/>");
