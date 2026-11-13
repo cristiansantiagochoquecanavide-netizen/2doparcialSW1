@@ -635,15 +635,41 @@ public class XmiService {
   private void appendXmi21DiagramExtension(Document doc, Element extension, Element legacyRoot) {
     NodeList oldDiagrams = legacyRoot.getElementsByTagName("UML:Diagram");
     if (oldDiagrams.getLength() == 0) return;
+    Element oldPackage = firstDescendant(legacyRoot, "UML:Package");
+    String packageId = oldPackage == null ? "" : getAttr(oldPackage, "xmi.id", "xmi:id");
     Element diagrams = doc.createElement("diagrams");
     extension.appendChild(diagrams);
     for (int i = 0; i < oldDiagrams.getLength(); i++) {
       Element old = (Element) oldDiagrams.item(i);
       Element diagram = doc.createElement("diagram");
       diagram.setAttribute("xmi:id", getAttr(old, "xmi.id", "xmi:id"));
-      diagram.setAttribute("name", getAttr(old, "name"));
-      diagram.setAttribute("type", "Class");
       diagrams.appendChild(diagram);
+
+      // EA's XMI 2.1 importer reads diagram ownership and type from these child
+      // elements. Putting name/type directly on <diagram> leaves the imported
+      // diagram detached from the package; EA then creates an empty canvas.
+      Element model = doc.createElement("model");
+      model.setAttribute("package", packageId);
+      model.setAttribute("localID", "1");
+      model.setAttribute("owner", packageId);
+      diagram.appendChild(model);
+
+      Element properties = doc.createElement("properties");
+      properties.setAttribute("name", getAttr(old, "name"));
+      properties.setAttribute("type", "Logical");
+      diagram.appendChild(properties);
+
+      Element project = doc.createElement("project");
+      project.setAttribute("author", "Proyecto CASE");
+      project.setAttribute("version", "1.0");
+      diagram.appendChild(project);
+
+      appendDiagramTaggedValue(doc, old, diagram, "EAStyle", "style1");
+      appendDiagramTaggedValue(doc, old, diagram, "styleex", "style2");
+      appendDiagramTaggedValue(doc, old, diagram, "swimlanes", "swimlanes");
+      appendDiagramTaggedValue(doc, old, diagram, "matrixitems", "matrixitems");
+      diagram.appendChild(doc.createElement("extendedProperties"));
+
       Element elements = doc.createElement("elements");
       diagram.appendChild(elements);
       NodeList oldElements = old.getElementsByTagName("UML:DiagramElement");
@@ -657,6 +683,22 @@ public class XmiService {
         elements.appendChild(element);
       }
     }
+  }
+
+  private void appendDiagramTaggedValue(Document doc, Element oldDiagram, Element diagram,
+      String taggedValueName, String eaElementName) {
+    NodeList taggedValues = oldDiagram.getElementsByTagName("UML:TaggedValue");
+    String value = "";
+    for (int i = 0; i < taggedValues.getLength(); i++) {
+      Element taggedValue = (Element) taggedValues.item(i);
+      if (taggedValueName.equals(getAttr(taggedValue, "tag"))) {
+        value = getAttr(taggedValue, "value");
+        break;
+      }
+    }
+    Element child = doc.createElement(eaElementName);
+    child.setAttribute("value", value);
+    diagram.appendChild(child);
   }
 
   private Element firstElement(Element parent, String tagName) {
