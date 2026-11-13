@@ -152,10 +152,9 @@ public class XmiService {
         if (hasAttrs || hasMethods) {
           sb.append("              <UML:Classifier.feature>\n");
           if (hasAttrs) {
-            // EA uses xmi:Extension/.../containment/@position to sort imported attributes.
-            // Emit backwards and number the extension positions in import order so the
-            // resulting EA list matches the editor's original order.
-            for (int attrIndex = attrs.size() - 1; attrIndex >= 0; attrIndex--) {
+            // Keep the UML feature sequence in the same order as the editor. EA preserves
+            // this encounter order when importing the classifier features.
+            for (int attrIndex = 0; attrIndex < attrs.size(); attrIndex++) {
               JsonNode a = attrs.get(attrIndex);
               int pos = attrIndex;
               String name = a.path("name").asText().trim();
@@ -897,7 +896,7 @@ public class XmiService {
           .append("        <style appearance=\"BackColor=-1;BorderColor=-1;BorderWidth=-1;FontColor=-1;VSwimLanes=1;HSwimLanes=1;BorderStyle=0;\"/>\n");
       if (attrs != null && attrs.isArray()) {
         sb.append("        <attributes>\n");
-        for (int attrIndex = attrs.size() - 1; attrIndex >= 0; attrIndex--) {
+        for (int attrIndex = 0; attrIndex < attrs.size(); attrIndex++) {
           JsonNode attr = attrs.get(attrIndex);
           int position = attrIndex;
           String name = attr.path("name").asText().trim();

@@ -289,7 +289,7 @@ class XmiServiceTest {
   }
 
   @Test
-  void exportXmiCompensatesForEnterpriseArchitectAttributeImportOrder() {
+  void exportXmiPreservesEnterpriseArchitectAttributeOrder() {
     ElementoUML pago = new ElementoUML(
         diagram, TipoElementoUML.CLASE, "Pago", 100.0, 100.0,
         """
@@ -312,16 +312,15 @@ class XmiServiceTest {
 
     String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
-    // EA imports attributes in reverse encounter order, so the XMI sequence is reversed
-    // and its extension positions must describe the order EA should store.
-    assertThat(xmi.indexOf("name=\"idCuota\"")).isLessThan(xmi.indexOf("name=\"idPago\""));
+    // Both the UML feature sequence and EA extension sequence must match the editor order.
+    assertThat(xmi.indexOf("name=\"idPago\"")).isLessThan(xmi.indexOf("name=\"idCuota\""));
     String eaAttributes = xmi.substring(xmi.indexOf("<attributes>"), xmi.indexOf("</attributes>"));
     int cuotaStart = eaAttributes.indexOf("name=\"idCuota\"");
     int pagoStart = eaAttributes.indexOf("name=\"idPago\"");
     String cuotaMetadata = eaAttributes.substring(cuotaStart, eaAttributes.indexOf("</attribute>", cuotaStart));
     String pagoMetadata = eaAttributes.substring(pagoStart, eaAttributes.indexOf("</attribute>", pagoStart));
-    assertThat(cuotaMetadata).contains("position=\"1\"");
     assertThat(pagoMetadata).contains("position=\"0\"");
+    assertThat(cuotaMetadata).contains("position=\"1\"");
     assertThat(xmi).contains("<lowerValue").contains("xmi:type=\"uml:LiteralInteger\"");
     assertThat(xmi).contains("<upperValue").contains("xmi:type=\"uml:LiteralUnlimitedNatural\"");
     assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"0\"/>");
