@@ -695,6 +695,8 @@ class XmiServiceTest {
 
     // 1. Validar que el documento usa una sola versión coherente de XMI/UML.
     assertThat(xmi).contains("xmi:version=\"2.1\"");
+    assertThat(xmi).contains("<xmi:Documentation exporter=\"Enterprise Architect\" exporterVersion=\"6.5\"/>")
+        .contains("name=\"EA Model\"").contains("visibility=\"public\"");
     assertThat(xmi).contains("xmlns:uml=\"http://schema.omg.org/spec/UML/2.1\"");
     assertThat(xmi).contains("xmi:type=\"uml:Class\"");
     assertThat(xmi).contains("name=\"Cliente\"");

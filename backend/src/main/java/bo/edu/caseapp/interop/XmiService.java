@@ -440,8 +440,11 @@ public class XmiService {
       root.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:version", "2.1");
 
       Element docs = result.createElementNS("http://schema.omg.org/spec/XMI/2.1", "xmi:Documentation");
-      docs.setAttribute("exporter", "Proyecto CASE");
-      docs.setAttribute("exporterVersion", "1.0");
+      // EA uses this identity to enable its vendor-specific XMI extension,
+      // including the diagram interchange data. A custom exporter identity can
+      // make EA import UML classifiers while silently ignoring <diagrams>.
+      docs.setAttribute("exporter", "Enterprise Architect");
+      docs.setAttribute("exporterVersion", "6.5");
       root.appendChild(docs);
 
       Element oldModel = firstDescendant(legacy.getDocumentElement(), "UML:Model");
@@ -450,6 +453,7 @@ public class XmiService {
       model.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:type", "uml:Model");
       model.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:id", getAttr(oldModel, "xmi.id", "xmi:id"));
       model.setAttribute("name", getAttr(oldModel, "name"));
+      model.setAttribute("visibility", "public");
       root.appendChild(model);
 
       Element oldPackage = firstDescendant(oldModel, "UML:Package");
