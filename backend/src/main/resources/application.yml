@@ -27,6 +27,10 @@ spring:
     properties:
       hibernate:
         default_schema: case_tool
+  data:
+    jpa:
+      repositories:
+        bootstrap-mode: lazy
 server:
   port: ${PORT:${SERVER_PORT:8080}}
 app:
