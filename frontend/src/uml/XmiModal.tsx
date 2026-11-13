@@ -251,12 +251,12 @@ export function XmiModal({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
               <h4 style={{ margin: 0 }}>Exportar Diagrama Actual</h4>
               <span style={{ fontSize: '0.75rem', background: '#dbeafe', color: '#1d4ed8', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
-                {activeFormat === 'xmi' ? 'Formato XMI 1.1 / XML de Enterprise Architect' : 'Formato JSON'}
+                {activeFormat === 'xmi' ? 'Formato OMG XMI 2.1 / Enterprise Architect' : 'Formato JSON'}
               </span>
             </div>
             <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '1rem' }}>
               {activeFormat === 'xmi'
-                ? 'Genera un documento XMI 1.1 / XML con la estructura completa de clases, interfaces, abstractas, enums, atributos, métodos, multiplicidades y geometría de lienzo compatible con Sparx Enterprise Architect.'
+                ? 'Genera un documento UML 2.1 / XMI 2.1 con clases, interfaces, enumeraciones, atributos, métodos, multiplicidades y geometría compatible con Sparx Enterprise Architect.'
                 : 'Exporta la estructura completa con coordenadas en lienzo, estilos, descripciones y multiplicidades en formato JSON.'}
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

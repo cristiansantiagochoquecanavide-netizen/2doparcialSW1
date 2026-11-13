@@ -157,7 +157,8 @@ class XmiServiceTest {
     String exportedXmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
     assertThat(exportedXmi).isNotBlank();
-    assertThat(exportedXmi).contains("xmi.version=\"1.1\"");
+    assertThat(exportedXmi).contains("xmi:version=\"2.1\"");
+    assertThat(exportedXmi).contains("http://schema.omg.org/spec/UML/2.1");
     assertThat(exportedXmi).contains("encoding=\"UTF-8\"");
     assertThat(exportedXmi).contains("name=\"Cliente\"");
     assertThat(exportedXmi).contains("name=\"Pedido\"");
@@ -272,16 +273,18 @@ class XmiServiceTest {
 
     String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
-    assertThat(xmi).contains("xmlns:xmi=\"http://www.omg.org/XMI\"");
-    assertThat(xmi).contains("<UML:Interface name=\"IProcesable\"");
-    assertThat(xmi).contains("<UML:Enumeration name=\"MetodoPago\"");
+    assertThat(xmi).contains("xmlns:xmi=\"http://schema.omg.org/spec/XMI/2.1\"");
+    assertThat(xmi).contains("xmi:type=\"uml:Interface\"");
+    assertThat(xmi).contains("name=\"IProcesable\"");
+    assertThat(xmi).contains("xmi:type=\"uml:Enumeration\"");
+    assertThat(xmi).contains("name=\"MetodoPago\"");
     assertThat(xmi).contains("isAbstract=\"true\"");
-    assertThat(xmi).contains("<UML:Dependency");
-    assertThat(xmi).contains("<UML:Abstraction");
+    assertThat(xmi).contains("xmi:type=\"uml:Dependency\"");
+    assertThat(xmi).contains("xmi:type=\"uml:Abstraction\"");
     assertThat(xmi).contains("<xmi:Extension extender=\"Enterprise Architect\" extenderID=\"6.5\">");
     assertThat(xmi).contains("<connector xmi:idref=\"EAID_DDDDDDDD_DDDD_DDDD_DDDD_DDDDDDDDDDDD\"");
     assertThat(xmi).contains("<connector xmi:idref=\"EAID_FFFFFFFF_FFFF_FFFF_FFFF_FFFFFFFFFFFF\"");
-    assertThat(xmi).contains("type=\"EAID_11111111_1111_1111_1111_111111111111\">");
+    assertThat(xmi).contains("EAID_11111111_1111_1111_1111_111111111111");
     assertThat(xmi).contains("ea_type=\"Realization\"");
   }
 
@@ -309,12 +312,14 @@ class XmiServiceTest {
 
     String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
-    assertThat(xmi.indexOf("<UML:Attribute name=\"idPago\"")).isLessThan(xmi.indexOf("<UML:Attribute name=\"idCuota\""));
+    assertThat(xmi.indexOf("name=\"idPago\"")).isLessThan(xmi.indexOf("name=\"idCuota\""));
+    assertThat(xmi).contains("<lowerValue").contains("xmi:type=\"uml:LiteralInteger\"");
+    assertThat(xmi).contains("<upperValue").contains("xmi:type=\"uml:LiteralUnlimitedNatural\"");
     assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"0\"/>");
     assertThat(xmi).contains("<containment containment=\"Not Specified\" position=\"1\"/>");
     assertThat(xmi).contains("<connector xmi:idref=\"EAID_CCCCCCCC_CCCC_CCCC_CCCC_CCCCCCCCCCCC\"");
-    assertThat(xmi).contains("<type multiplicity=\"1\" aggregation=\"none\" containment=\"Unspecified\"/>");
-    assertThat(xmi).contains("<type multiplicity=\"0..*\" aggregation=\"none\" containment=\"Unspecified\"/>");
+    assertThat(xmi).contains("multiplicity=\"1\"");
+    assertThat(xmi).contains("multiplicity=\"0..*\"");
   }
 
   @Test
@@ -332,12 +337,12 @@ class XmiServiceTest {
 
     String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
-    assertThat(xmi).contains("<UML:Parameter name=\"clienteId\"");
-    assertThat(xmi).contains("<UML:Parameter name=\"urgente\"");
-    assertThat(xmi).contains("tag=\"type\" value=\"Long\"");
-    assertThat(xmi).contains("tag=\"type\" value=\"Boolean\"");
-    assertThat(xmi).contains("<UML:Parameter name=\"return\"");
-    assertThat(xmi).contains("tag=\"type\" value=\"Pedido\"");
+    assertThat(xmi).contains("<ownedParameter").contains("name=\"clienteId\"");
+    assertThat(xmi).contains("name=\"urgente\"");
+    assertThat(xmi).contains("name=\"Long\"");
+    assertThat(xmi).contains("name=\"Boolean\"");
+    assertThat(xmi).contains("name=\"return\"");
+    assertThat(xmi).contains("name=\"Pedido\"");
   }
 
   @Test
@@ -688,35 +693,33 @@ class XmiServiceTest {
 
     String xmi = service.exportXmi(project.getId(), diagram.getId(), "tester@case.bo");
 
-    // 1. Validar tipos de datos primitivos en <uml:Model>
-    assertThat(xmi).contains("xmi.version=\"1.1\"");
-    assertThat(xmi).contains("xmlns:UML=\"omg.org/UML1.3\"");
-    assertThat(xmi).contains("<UML:Class name=\"Cliente\"");
-    assertThat(xmi).contains("<UML:Class name=\"Reserva\"");
-    assertThat(xmi).contains("<UML:Class name=\"Sucursal\"");
+    // 1. Validar que el documento usa una sola versión coherente de XMI/UML.
+    assertThat(xmi).contains("xmi:version=\"2.1\"");
+    assertThat(xmi).contains("xmlns:uml=\"http://schema.omg.org/spec/UML/2.1\"");
+    assertThat(xmi).contains("xmi:type=\"uml:Class\"");
+    assertThat(xmi).contains("name=\"Cliente\"");
+    assertThat(xmi).contains("name=\"Reserva\"");
+    assertThat(xmi).contains("name=\"Sucursal\"");
 
     // 2. Validar ownedAttribute con tipos enlazados
-    assertThat(xmi).contains("<UML:Attribute name=\"Id\"");
-    assertThat(xmi).contains("<UML:Attribute name=\"Nombre\"");
-    assertThat(xmi).contains("<UML:Attribute name=\"IdSucursal\"");
-    assertThat(xmi).contains("<UML:StructuralFeature.type><UML:Classifier xmi.idref=\"Integer\"/></UML:StructuralFeature.type>");
-    assertThat(xmi).contains("<UML:StructuralFeature.type><UML:Classifier xmi.idref=\"long\"/></UML:StructuralFeature.type>");
-    assertThat(xmi).contains("<UML:TaggedValue tag=\"type\" value=\"Integer\"/>");
-    assertThat(xmi).contains("<UML:TaggedValue tag=\"type\" value=\"long\"/>");
-    assertThat(xmi).contains("visibility=\"private\" changeability=\"changeable\"");
+    assertThat(xmi).contains("<ownedAttribute").contains("name=\"Id\"");
+    assertThat(xmi).contains("name=\"Nombre\"");
+    assertThat(xmi).contains("name=\"IdSucursal\"");
+    assertThat(xmi).contains("name=\"Integer\"");
+    assertThat(xmi).contains("name=\"long\"");
+    assertThat(xmi).contains("visibility=\"private\"");
 
     // 3. Validar extensión de Enterprise Architect con tipos y scopes
-    assertThat(xmi).contains("<UML:Association name=\"realiza\"");
-    assertThat(xmi).contains("<UML:Association name=\"\"");
-    assertThat(xmi).contains("xmi.idref=\"EAID_11111111_0000_0000_0000_000000000001\"");
-    assertThat(xmi).contains("xmi.idref=\"EAID_22222222_0000_0000_0000_000000000002\"");
-    assertThat(xmi).contains("xmi.idref=\"EAID_33333333_0000_0000_0000_000000000003\"");
-    assertThat(xmi).contains("lower=\"1\" upper=\"1\"");
-    assertThat(xmi).contains("lower=\"0\" upper=\"-1\"");
-    assertThat(xmi).contains("lower=\"1\" upper=\"-1\"");
+    assertThat(xmi).contains("xmi:type=\"uml:Association\"");
+    assertThat(xmi).contains("name=\"realiza\"");
+    assertThat(xmi).contains("xmi:idref=\"EAID_11111111_0000_0000_0000_000000000001\"");
+    assertThat(xmi).contains("xmi:idref=\"EAID_22222222_0000_0000_0000_000000000002\"");
+    assertThat(xmi).contains("xmi:idref=\"EAID_33333333_0000_0000_0000_000000000003\"");
+    assertThat(xmi).contains("value=\"1\"");
+    assertThat(xmi).contains("value=\"0\"");
+    assertThat(xmi).contains("value=\"*\"");
 
     // 4. Validar geometría de diagrama de Enterprise Architect
-    assertThat(xmi).contains("<UML:Diagram.element>");
     assertThat(xmi).contains("geometry=\"Left=120;Top=140;Right=320;");
     assertThat(xmi).contains("geometry=\"Left=420;Top=360;Right=620;");
     assertThat(xmi).contains("geometry=\"Left=720;Top=200;Right=920;");
@@ -729,7 +732,8 @@ class XmiServiceTest {
     assertThat(xmi).contains("<xmi:Extension extender=\"Enterprise Architect\" extenderID=\"6.5\">");
     assertThat(xmi).contains("<connectors>");
     assertThat(xmi).contains("<connector xmi:idref=\"");
-    assertThat(xmi).contains("<properties name=\"realiza\" ea_type=\"Association\" direction=\"");
+    assertThat(xmi).contains("name=\"realiza\"");
+    assertThat(xmi).contains("ea_type=\"Association\"");
     assertThat(xmi).contains("multiplicity=\"1..1\"");
     assertThat(xmi).contains("multiplicity=\"0..*\"");
     assertThat(xmi).contains("multiplicity=\"1..*\"");

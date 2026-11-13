@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
+import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
@@ -50,6 +51,14 @@ public class XmiService {
   }
 
   public String exportXmi(UUID projectId, UUID diagramId, String email) {
+    return convertLegacyExportToXmi21(exportXmi11(projectId, diagramId, email));
+  }
+
+  /** Builds the existing EA metadata, then emits it alongside a UML 2.1 XMI model.
+   *  The old exporter mixed an XMI 1.1 envelope with XMI 2.x extension syntax,
+   *  causing EA to import the UML core while ignoring feature ordering metadata.
+   */
+  private String exportXmi11(UUID projectId, UUID diagramId, String email) {
     projectService.requireAccess(projectId, email);
     DiagramaClase diagram = validateDiagram(projectId, diagramId);
     List<ElementoUML> elements = elementRepo.findByDiagramaId(diagramId);
@@ -414,6 +423,296 @@ public class XmiService {
       sb.append("</XMI>\n");
 
       return sb.toString();
+  }
+
+  private String convertLegacyExportToXmi21(String legacyXml) {
+    try {
+      DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+      factory.setNamespaceAware(false);
+      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+      DocumentBuilder builder = factory.newDocumentBuilder();
+      Document legacy = builder.parse(new InputSource(new StringReader(legacyXml)));
+      Document result = builder.getDOMImplementation().createDocument(
+          "http://schema.omg.org/spec/XMI/2.1", "xmi:XMI", null);
+      Element root = result.getDocumentElement();
+      root.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:xmi", "http://schema.omg.org/spec/XMI/2.1");
+      root.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:uml", "http://schema.omg.org/spec/UML/2.1");
+      root.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:version", "2.1");
+
+      Element docs = result.createElementNS("http://schema.omg.org/spec/XMI/2.1", "xmi:Documentation");
+      docs.setAttribute("exporter", "Proyecto CASE");
+      docs.setAttribute("exporterVersion", "1.0");
+      root.appendChild(docs);
+
+      Element oldModel = firstDescendant(legacy.getDocumentElement(), "UML:Model");
+      if (oldModel == null) throw new IllegalArgumentException("El XMI generado no contiene un modelo UML.");
+      Element model = result.createElementNS("http://schema.omg.org/spec/UML/2.1", "uml:Model");
+      model.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:type", "uml:Model");
+      model.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:id", getAttr(oldModel, "xmi.id", "xmi:id"));
+      model.setAttribute("name", getAttr(oldModel, "name"));
+      root.appendChild(model);
+
+      Element oldPackage = firstDescendant(oldModel, "UML:Package");
+      if (oldPackage == null) throw new IllegalArgumentException("El XMI generado no contiene el paquete UML.");
+      Element pkg = result.createElementNS("http://schema.omg.org/spec/UML/2.1", "packagedElement");
+      pkg.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:type", "uml:Package");
+      pkg.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:id", getAttr(oldPackage, "xmi.id", "xmi:id"));
+      pkg.setAttribute("name", getAttr(oldPackage, "name"));
+      model.appendChild(pkg);
+
+      Element owned = firstElement(oldPackage, "UML:Namespace.ownedElement");
+      if (owned != null) {
+        NodeList oldItems = owned.getChildNodes();
+        for (int i = 0; i < oldItems.getLength(); i++) {
+          if (oldItems.item(i) instanceof Element oldItem) {
+            convertUml21Element(oldItem, pkg, result, pkg);
+          }
+        }
+      }
+
+      Element oldExtension = firstElement(legacy.getDocumentElement(), "xmi:Extension");
+      if (oldExtension != null) {
+        Element extension = (Element) result.importNode(oldExtension, true);
+        remapXmiNamespace(extension);
+        root.appendChild(extension);
+        appendXmi21DiagramExtension(result, extension, legacy.getDocumentElement());
+      }
+
+      javax.xml.transform.Transformer transformer = javax.xml.transform.TransformerFactory.newInstance().newTransformer();
+      transformer.setOutputProperty(javax.xml.transform.OutputKeys.ENCODING, "UTF-8");
+      transformer.setOutputProperty(javax.xml.transform.OutputKeys.INDENT, "yes");
+      java.io.StringWriter writer = new java.io.StringWriter();
+      transformer.transform(new javax.xml.transform.dom.DOMSource(result), new javax.xml.transform.stream.StreamResult(writer));
+      return writer.toString();
+    } catch (Exception ex) {
+      throw new IllegalStateException("No se pudo generar el XMI 2.1 para Enterprise Architect.", ex);
+    }
+  }
+
+  private void convertUml21Element(Element old, Element parent, Document doc, Element packageElement) {
+    String tag = old.getTagName();
+    if (tag.equals("UML:Namespace.ownedElement") || tag.equals("UML:Classifier.feature")
+        || tag.equals("UML:BehavioralFeature.parameter")) {
+      NodeList children = old.getChildNodes();
+      for (int i = 0; i < children.getLength(); i++) {
+        if (children.item(i) instanceof Element child) convertUml21Element(child, parent, doc, packageElement);
+      }
+      return;
+    }
+    String type = switch (tag) {
+      case "UML:Class" -> "Class";
+      case "UML:Interface" -> "Interface";
+      case "UML:Enumeration" -> "Enumeration";
+      case "UML:Attribute" -> "Property";
+      case "UML:Operation" -> "Operation";
+      case "UML:Parameter" -> "Parameter";
+      case "UML:Association" -> "Association";
+      case "UML:Generalization" -> "Generalization";
+      case "UML:Dependency" -> "Dependency";
+      case "UML:Abstraction" -> "Abstraction";
+      default -> null;
+    };
+    if (type == null) return;
+
+    if (tag.equals("UML:Association")) {
+      Element assoc = createPackagedElement(doc, parent, old, type);
+      Element connection = firstElement(old, "UML:Association.connection");
+      if (connection != null) {
+        int endIndex = 0;
+        NodeList ends = connection.getChildNodes();
+        for (int i = 0; i < ends.getLength(); i++) {
+          if (!(ends.item(i) instanceof Element end) || !end.getTagName().equals("UML:AssociationEnd")) continue;
+          String endId = getAttr(old, "xmi.id", "xmi:id") + "_END_" + (++endIndex);
+          Element ownedEnd = doc.createElementNS("http://schema.omg.org/spec/UML/2.1", "ownedEnd");
+          setXmi(ownedEnd, "type", "uml:Property");
+          setXmi(ownedEnd, "id", endId);
+          ownedEnd.setAttribute("type", getAttr(end, "type"));
+          ownedEnd.setAttribute("aggregation", getAttr(end, "aggregation"));
+          String[] bounds = endMultiplicity(end);
+          appendLiteral(ownedEnd, "lowerValue", "LiteralInteger", bounds[0]);
+          appendLiteral(ownedEnd, "upperValue", "LiteralUnlimitedNatural", bounds[1]);
+          assoc.appendChild(ownedEnd);
+          Element member = doc.createElementNS("http://schema.omg.org/spec/UML/2.1", "memberEnd");
+          setXmi(member, "idref", endId);
+          assoc.insertBefore(member, ownedEnd);
+        }
+      }
+      return;
+    }
+    if (tag.equals("UML:Generalization")) {
+      Element generalization = createPackagedElement(doc, parent, old, type);
+      generalization.setAttribute("specific", getAttr(old, "child"));
+      generalization.setAttribute("general", getAttr(old, "parent"));
+      return;
+    }
+    if (tag.equals("UML:Dependency") || tag.equals("UML:Abstraction")) {
+      Element dependency = createPackagedElement(doc, parent, old, type);
+      dependency.setAttribute("client", getAttr(old, "client"));
+      dependency.setAttribute("supplier", getAttr(old, "supplier"));
+      return;
+    }
+
+    String targetTag = switch (tag) {
+      case "UML:Class", "UML:Interface", "UML:Enumeration" -> "packagedElement";
+      case "UML:Attribute" -> "ownedAttribute";
+      case "UML:Operation" -> "ownedOperation";
+      default -> "ownedParameter";
+    };
+    Element converted = doc.createElementNS("http://schema.omg.org/spec/UML/2.1", targetTag);
+    setXmi(converted, "type", "uml:" + type);
+    setXmi(converted, "id", getAttr(old, "xmi.id", "xmi:id"));
+    copyIfPresent(old, converted, "name");
+    copyIfPresent(old, converted, "visibility");
+    copyIfPresent(old, converted, "isAbstract");
+    if (tag.equals("UML:Parameter")) {
+      String direction = getAttr(old, "kind");
+      if (!direction.isBlank()) converted.setAttribute("direction", direction);
+    }
+    parent.appendChild(converted);
+
+    if (tag.equals("UML:Attribute") || tag.equals("UML:Parameter")) {
+      String rawType = getAttributeType(old);
+      if (!rawType.isBlank()) {
+        String typeId = "DATATYPE_" + sanitizeId(rawType);
+        converted.setAttribute("type", typeId);
+        ensurePrimitiveType(packageElement, doc, typeId, rawType);
+      }
+    }
+    NodeList children = old.getChildNodes();
+    for (int i = 0; i < children.getLength(); i++) {
+      if (children.item(i) instanceof Element child) convertUml21Element(child, converted, doc, packageElement);
+    }
+  }
+
+  private Element createPackagedElement(Document doc, Element parent, Element old, String type) {
+    Element item = doc.createElementNS("http://schema.omg.org/spec/UML/2.1", "packagedElement");
+    setXmi(item, "type", "uml:" + type);
+    setXmi(item, "id", getAttr(old, "xmi.id", "xmi:id"));
+    copyIfPresent(old, item, "name");
+    parent.appendChild(item);
+    return item;
+  }
+
+  private void ensurePrimitiveType(Element pkg, Document doc, String id, String name) {
+    NodeList children = pkg.getChildNodes();
+    for (int i = 0; i < children.getLength(); i++) {
+      if (children.item(i) instanceof Element e && getAttr(e, "xmi:id", "xmi.id").equals(id)) return;
+    }
+    Element primitive = doc.createElementNS("http://schema.omg.org/spec/UML/2.1", "packagedElement");
+    setXmi(primitive, "type", "uml:PrimitiveType");
+    setXmi(primitive, "id", id);
+    primitive.setAttribute("name", name);
+    pkg.appendChild(primitive);
+  }
+
+  private String getAttributeType(Element feature) {
+    Element taggedValues = firstElement(feature, "UML:ModelElement.taggedValue");
+    if (taggedValues != null) {
+      NodeList children = taggedValues.getChildNodes();
+      for (int i = 0; i < children.getLength(); i++) {
+        if (children.item(i) instanceof Element tag && getAttr(tag, "tag").equals("type")) return getAttr(tag, "value");
+      }
+    }
+    return "";
+  }
+
+  private String[] endMultiplicity(Element end) {
+    Element mult = firstElement(end, "UML:AssociationEnd.multiplicity");
+    Element range = mult == null ? null : firstDescendant(mult, "UML:MultiplicityRange");
+    String lower = range == null ? "1" : getAttr(range, "lower");
+    String upper = range == null ? "1" : getAttr(range, "upper");
+    return new String[]{lower.isBlank() ? "1" : lower, upper.equals("-1") ? "*" : (upper.isBlank() ? "1" : upper)};
+  }
+
+  private void appendLiteral(Element parent, String tag, String type, String value) {
+    Element literal = parent.getOwnerDocument().createElementNS("http://schema.omg.org/spec/UML/2.1", tag);
+    setXmi(literal, "type", "uml:" + type);
+    setXmi(literal, "id", "LIT_" + UUID.randomUUID().toString().replace("-", ""));
+    literal.setAttribute("value", value);
+    parent.appendChild(literal);
+  }
+
+  private void appendXmi21DiagramExtension(Document doc, Element extension, Element legacyRoot) {
+    NodeList oldDiagrams = legacyRoot.getElementsByTagName("UML:Diagram");
+    if (oldDiagrams.getLength() == 0) return;
+    Element diagrams = doc.createElement("diagrams");
+    extension.appendChild(diagrams);
+    for (int i = 0; i < oldDiagrams.getLength(); i++) {
+      Element old = (Element) oldDiagrams.item(i);
+      Element diagram = doc.createElement("diagram");
+      diagram.setAttribute("xmi:id", getAttr(old, "xmi.id", "xmi:id"));
+      diagram.setAttribute("name", getAttr(old, "name"));
+      diagram.setAttribute("type", "Class");
+      diagrams.appendChild(diagram);
+      Element elements = doc.createElement("elements");
+      diagram.appendChild(elements);
+      NodeList oldElements = old.getElementsByTagName("UML:DiagramElement");
+      for (int j = 0; j < oldElements.getLength(); j++) {
+        Element oldElement = (Element) oldElements.item(j);
+        Element element = doc.createElement("element");
+        copyIfPresent(oldElement, element, "subject");
+        copyIfPresent(oldElement, element, "geometry");
+        copyIfPresent(oldElement, element, "seqno");
+        copyIfPresent(oldElement, element, "style");
+        elements.appendChild(element);
+      }
+    }
+  }
+
+  private Element firstElement(Element parent, String tagName) {
+    if (parent == null) return null;
+    NodeList children = parent.getChildNodes();
+    for (int i = 0; i < children.getLength(); i++) {
+      if (children.item(i) instanceof Element child && child.getTagName().equals(tagName)) return child;
+    }
+    return null;
+  }
+
+  private Element firstDescendant(Element parent, String tagName) {
+    if (parent == null) return null;
+    NodeList matches = parent.getElementsByTagName(tagName);
+    return matches.getLength() == 0 ? null : (Element) matches.item(0);
+  }
+
+  private void setXmi(Element element, String localName, String value) {
+    element.setAttributeNS("http://schema.omg.org/spec/XMI/2.1", "xmi:" + localName, value);
+  }
+
+  private void remapXmiNamespace(Element element) {
+    String oldNamespace = "http://www.omg.org/XMI";
+    String newNamespace = "http://schema.omg.org/spec/XMI/2.1";
+    NodeList nodes = element.getElementsByTagName("*");
+    List<Element> all = new ArrayList<>();
+    all.add(element);
+    for (int i = 0; i < nodes.getLength(); i++) all.add((Element) nodes.item(i));
+    for (Element current : all) {
+      org.w3c.dom.NamedNodeMap attributes = current.getAttributes();
+      List<String[]> remapped = new ArrayList<>();
+      for (int i = 0; i < attributes.getLength(); i++) {
+        Node attr = attributes.item(i);
+        if (oldNamespace.equals(attr.getNamespaceURI()) && attr.getNodeName().startsWith("xmi:")) {
+          remapped.add(new String[]{attr.getLocalName(), attr.getNodeValue()});
+        } else if (attr.getNodeName().equals("xmi:type") && attr.getNodeValue().startsWith("UML:")) {
+          remapped.add(new String[]{"type", attr.getNodeValue().replaceFirst("^UML:", "uml:")});
+        }
+      }
+      for (String[] attr : remapped) {
+        if (current.hasAttribute("xmi:" + attr[0])) current.removeAttribute("xmi:" + attr[0]);
+        if (oldNamespace.equals(current.getAttributeNode("xmi:" + attr[0]) == null ? null
+            : current.getAttributeNode("xmi:" + attr[0]).getNamespaceURI())) {
+          current.removeAttributeNS(oldNamespace, attr[0]);
+        }
+        current.setAttributeNS(newNamespace, "xmi:" + attr[0], attr[1]);
+      }
+      if (current.hasAttribute("xmlns:xmi")) {
+        current.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:xmi", newNamespace);
+      }
+    }
+  }
+
+  private void copyIfPresent(Element source, Element target, String name) {
+    String value = getAttr(source, name);
+    if (!value.isBlank()) target.setAttribute(name, value);
   }
 
   private void appendDependency(StringBuilder sb, RelacionUML rel, String relGuid,
