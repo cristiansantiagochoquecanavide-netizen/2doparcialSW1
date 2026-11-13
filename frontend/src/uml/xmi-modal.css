@@ -54,6 +54,17 @@
   line-height: 1.45;
 }
 
+.xmi-ea-import-hint {
+  margin-top: 0.8rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .xmi-file-input {
   width: 100%;
   box-sizing: border-box;

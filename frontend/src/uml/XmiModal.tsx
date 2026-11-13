@@ -293,6 +293,13 @@ export function XmiModal({
                 </button>
               )}
             </div>
+            {activeFormat === 'xmi' && (
+              <div className="xmi-ea-import-hint" role="note">
+                <strong>Para que EA cree el diagrama:</strong> en Enterprise Architect usa{' '}
+                <strong>Publish → Model Exchange → Import → XMI File</strong> y marca{' '}
+                <strong>Import Diagrams</strong> antes de importar. El XMI incluye el diagrama y la posición de sus elementos.
+              </div>
+            )}
           </div>
 
           {/* Sección de Importación */}
