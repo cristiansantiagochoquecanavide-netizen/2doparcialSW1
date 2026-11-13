@@ -122,7 +122,9 @@ public class AiAssistantService {
         .orElseThrow(() -> new NotFoundException("Usuario no encontrado."));
 
     boolean attributeDeletion = isAttributeDeletionRequest(request.command());
-    if (!"LLM_CANONICAL".equals(request.resolvedSource()) && !looksLikeSqlDdl(request.command()) && !attributeDeletion) {
+    boolean relationDeletion = isRelationDeletionRequest(request.command());
+    if (!"LLM_CANONICAL".equals(request.resolvedSource()) && !looksLikeSqlDdl(request.command())
+        && !attributeDeletion && !relationDeletion) {
       List<String> interpretedCommands = interpretCommandWithGroq(projectId, diagramId, email, request.command());
       if (interpretedCommands != null && !interpretedCommands.isEmpty()) {
         CommandResponse lastResponse = null;
@@ -338,6 +340,52 @@ public class AiAssistantService {
           success = true;
         } else {
           message = "No hay ninguna clase en el diagrama a la cual agregar los atributos.";
+        }
+
+      } else if (isRelationDeletionRequest(raw)) {
+        // Relation deletion is scoped to the requested pair (or an explicitly selected relation).
+        // Never pass this intent through Groq's class-deletion action.
+        List<RelacionUML> diagramRelations = relationRepo.findByDiagramaId(diagramId);
+        RelacionUML targetRelation = null;
+        Matcher relationEndpoints = Pattern.compile(
+            "(?i)\\bentre\\s+(?:la\\s+)?(?:clase\\s+)?([\\p{L}\\p{N}_]+)\\s+(?:y|con)\\s+(?:la\\s+)?(?:clase\\s+)?([\\p{L}\\p{N}_]+)")
+            .matcher(raw);
+        boolean endpointsFound = relationEndpoints.find();
+        if (endpointsFound) {
+          String firstClass = relationEndpoints.group(1);
+          String secondClass = relationEndpoints.group(2);
+          List<RelacionUML> matchingRelations = diagramRelations.stream()
+              .filter(relation -> connects(relation, firstClass, secondClass))
+              .toList();
+          if (matchingRelations.size() == 1) {
+            targetRelation = matchingRelations.get(0);
+          } else if (matchingRelations.size() > 1) {
+            message = "Hay más de una relación entre «" + firstClass + "» y «" + secondClass
+                + "». Selecciona la relación específica; no se eliminó ninguna.";
+          } else {
+            message = "No se encontró una relación entre «" + firstClass + "» y «" + secondClass
+                + "». No se eliminó ninguna clase.";
+          }
+        }
+        if (!endpointsFound && request.selectedRelationId() != null && !request.selectedRelationId().isBlank()) {
+          try {
+            UUID selectedId = UUID.fromString(request.selectedRelationId());
+            targetRelation = diagramRelations.stream()
+                .filter(relation -> relation.getId().equals(selectedId))
+                .findFirst().orElse(null);
+          } catch (IllegalArgumentException ignored) {}
+        }
+
+        if (targetRelation != null) {
+          String sourceName = targetRelation.getElementoOrigen().getNombre();
+          String targetName = targetRelation.getElementoDestino().getNombre();
+          umlService.deleteRelation(projectId, diagramId, email, targetRelation.getId(), expectedRevision);
+          actionType = "ELIMINAR_RELACION";
+          message = "Se eliminó la relación entre «" + sourceName + "» y «" + targetName
+              + "». Las clases y sus otras relaciones se conservaron.";
+          success = true;
+        } else if (message.startsWith("No se pudo interpretar")) {
+          message = "Indica las dos clases, por ejemplo: «Borra la relación entre ClaseA y ClaseB». No se eliminó ninguna clase.";
         }
 
       } else if (isAttributeDeletionRequest(raw)) {
@@ -1803,13 +1851,14 @@ public class AiAssistantService {
           {"operaciones":[{"accion":"...", ...}]}
           Acciones permitidas: CREAR_CLASE, AGREGAR_ATRIBUTOS, EDITAR_ELEMENTO, CREAR_RELACION,
           ESTABLECER_MULTIPLICIDAD, CAMBIAR_TIPO_RELACION, CREAR_CLASE_INTERMEDIA, CREAR_GENERALIZACION,
-          CREAR_COMPOSICION, CREAR_AGREGACION, ELIMINAR_ELEMENTO.
+          CREAR_COMPOSICION, CREAR_AGREGACION, ELIMINAR_ELEMENTO, ELIMINAR_RELACION.
           Campos admitidos en cada operación:
           - accion: una de las acciones permitidas arriba.
           - clase / nombre: nombre exacto del elemento.
           - nuevoNombre: nombre destino en renombre/edición.
           - atributos: arreglo de objetos {"nombre":"...", "tipo":"..."}.
           - origen, destino: clases conectadas.
+          - Para ELIMINAR_RELACION, origen y destino identifican el par de clases; nunca uses ELIMINAR_ELEMENTO para borrar una relación.
           - tipoRelacion: "asociacion", "herencia", "composicion", "agregacion", "dependencia".
           - multiplicidadOrigen, multiplicidadDestino: cardinalidades UML como "1", "*", "0..1", "1..*", o null.
           - claseIntermedia: nombre de la tabla/clase intermedia en relaciones muchos a muchos.
@@ -1900,6 +1949,8 @@ public class AiAssistantService {
         yield (multOrigen == null ? "1" : multOrigen) + " a " + (multDestino == null ? "*" : multDestino);
       }
       case "ELIMINAR_ELEMENTO" -> clase.isBlank() ? null : "Eliminar clase " + clase;
+      case "ELIMINAR_RELACION" -> source.isBlank() || target.isBlank()
+          ? null : "Eliminar relacion entre " + source + " y " + target;
       default -> null;
     };
   }
@@ -1962,6 +2013,21 @@ public class AiAssistantService {
     if (command == null) return false;
     String normalized = Normalizer.normalize(command, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
     return normalized.matches("(?is).*\\b(?:eliminar|borrar|elimina|borra)\\s+(?:el\\s+)?(?:atributo|campo|propiedad)\\b.*");
+  }
+
+  private boolean isRelationDeletionRequest(String command) {
+    if (command == null) return false;
+    String normalized = Normalizer.normalize(command, Normalizer.Form.NFD)
+        .replaceAll("\\p{M}", "")
+        .toLowerCase(Locale.ROOT);
+    return normalized.matches("(?is).*\\b(?:eliminar|borrar|elimina|borra|quitar|quita)\\b.*\\b(?:relacion(?:es)?|conexion(?:es)?|asociacion(?:es)?|vinculo(?:s)?|enlace(?:s)?)\\b.*");
+  }
+
+  private boolean connects(RelacionUML relation, String firstClass, String secondClass) {
+    String origin = relation.getElementoOrigen().getNombre();
+    String destination = relation.getElementoDestino().getNombre();
+    return (origin.equalsIgnoreCase(firstClass) && destination.equalsIgnoreCase(secondClass))
+        || (origin.equalsIgnoreCase(secondClass) && destination.equalsIgnoreCase(firstClass));
   }
 
   private int findAttributeIndex(JsonNode attributes, String requestedName) {
