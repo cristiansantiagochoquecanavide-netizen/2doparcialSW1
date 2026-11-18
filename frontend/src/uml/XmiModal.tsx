@@ -60,7 +60,7 @@ export function XmiModal({ projectId, diagramId, diagramName, token, revision, i
     try {
       setLoading(true)
       setStatusMessage(null)
-      const res = await fetch(`/api/projects/${projectId}/diagrams/${diagramId}/xmi/export-json`, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await fetch(`${apiBase}/api/projects/${projectId}/diagrams/${diagramId}/xmi/export-json`, { headers: { Authorization: `Bearer ${token}` } })
       if (!res.ok) throw new Error('Error al exportar archivo JSON.')
       const url = window.URL.createObjectURL(await res.blob())
       const a = document.createElement('a')
@@ -87,17 +87,27 @@ export function XmiModal({ projectId, diagramId, diagramName, token, revision, i
     try {
       setLoading(true)
       setStatusMessage(null)
-      const endpoint = activeFormat === 'xmi' ? `/api/projects/${projectId}/diagrams/${diagramId}/xmi/import` : `/api/projects/${projectId}/diagrams/${diagramId}/xmi/import-json`
+      const endpoint = `${apiBase}/api/projects/${projectId}/diagrams/${diagramId}/xmi/${activeFormat === 'xmi' ? 'import' : 'import-json'}`
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': activeFormat === 'xmi' ? 'application/xml' : 'application/json', Authorization: `Bearer ${token}`, 'X-Diagram-Revision': String(revision ?? 1) },
         body: importText
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.message || 'No se pudo importar el diagrama. Revisa el archivo y vuelve a intentarlo.')
+      const responseText = await res.text()
+      let responseBody: any = null
+      if (responseText.trim()) {
+        try { responseBody = JSON.parse(responseText) }
+        catch {
+          if (res.ok) throw new Error('El servidor devolvió una respuesta inválida después de importar. Recarga el diagrama para comprobar si los cambios se aplicaron.')
+        }
       }
-      const updated: DiagramFullView = await res.json()
+      if (!res.ok) {
+        throw new Error(responseBody?.message || `No se pudo importar el diagrama (HTTP ${res.status}). Revisa el archivo y vuelve a intentarlo.`)
+      }
+      if (!responseBody || !Array.isArray(responseBody.elements) || !Array.isArray(responseBody.relations)) {
+        throw new Error('El servidor aceptó la importación, pero no devolvió el diagrama actualizado. Recarga el diagrama para comprobar los cambios.')
+      }
+      const updated = responseBody as DiagramFullView
       setStatusMessage({ type: 'success', text: `Importación completada: ${updated.elements?.length ?? 0} elementos y ${updated.relations?.length ?? 0} relaciones.` })
       onDiagramUpdated(updated)
       window.setTimeout(onClose, 1500)
