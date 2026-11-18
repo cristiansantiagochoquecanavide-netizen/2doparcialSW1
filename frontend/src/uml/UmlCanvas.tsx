@@ -11,11 +11,11 @@ import {
   NodeChange,
   BackgroundVariant,
   MarkerType,
+  ConnectionLineType,
   SelectionMode,
   Position,
   reconnectEdge,
   BaseEdge,
-  StepEdge,
   EdgeLabelRenderer,
   ViewportPortal,
   type EdgeProps,
@@ -46,7 +46,7 @@ import { VersionHistoryModal, type VersionSummary } from './VersionHistoryModal'
 import { ActivityLogModal } from './ActivityLogModal'
 import { compareVersions, type VersionChange } from './versionDiff.mjs'
 import { layoutUmlGraph } from './autoLayout.mjs'
-import { measureRoutedLayout, routeUmlEdges, scoreUmlCandidates } from './routeUmlEdges.mjs'
+import { scoreUmlCandidates } from './routeUmlEdges.mjs'
 import { createDiagramRequestCoordinator, isStaleDiagramRevision, markPendingQueueForReview, mergePendingPositions, normalizeRelationEndpoint } from './diagramRequestCoordinator.mjs'
 import { XmiModal } from './XmiModal'
 import { ApiTesterModal } from './ApiTesterModal'
@@ -131,66 +131,13 @@ function ensureReflexiveHandlePair(connection: Connection): Connection {
   }
 }
 
-function buildReflexiveOrthogonalPath(
-  sourceX: number,
-  sourceY: number,
-  targetX: number,
-  targetY: number,
-  sourcePosition: Position,
-  targetPosition: Position
-) {
-  const margin = 48
-  const left = Math.min(sourceX, targetX) - margin
-  const right = Math.max(sourceX, targetX) + margin
-  const top = Math.min(sourceY, targetY) - margin
-  const bottom = Math.max(sourceY, targetY) + margin
-  const source = [sourceX, sourceY] as const
-  const target = [targetX, targetY] as const
-  let points: Array<readonly [number, number]>
-
-  if (sourcePosition === Position.Right && targetPosition === Position.Left) {
-    points = [source, [right, sourceY], [right, top], [left, top], [left, targetY], target]
-  } else if (sourcePosition === Position.Left && targetPosition === Position.Right) {
-    points = [source, [left, sourceY], [left, bottom], [right, bottom], [right, targetY], target]
-  } else if (sourcePosition === Position.Top && targetPosition === Position.Bottom) {
-    points = [source, [sourceX, top], [right, top], [right, bottom], [targetX, bottom], target]
-  } else if (sourcePosition === Position.Bottom && targetPosition === Position.Top) {
-    points = [source, [sourceX, bottom], [left, bottom], [left, top], [targetX, top], target]
-  } else if (sourcePosition === Position.Top) {
-    points = [source, [sourceX, top], [right, top], [right, targetY], target]
-  } else if (sourcePosition === Position.Bottom) {
-    points = [source, [sourceX, bottom], [right, bottom], [right, targetY], target]
-  } else if (sourcePosition === Position.Left) {
-    points = [source, [left, sourceY], [left, targetY], target]
-  } else {
-    points = [source, [right, sourceY], [right, targetY], target]
-  }
-
-  const path = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ')
-  let labelPoint = points[Math.floor(points.length / 2)]
-  let longestSegment = -1
-  for (let index = 1; index < points.length; index += 1) {
-    const [x1, y1] = points[index - 1]
-    const [x2, y2] = points[index]
-    const length = Math.abs(x2 - x1) + Math.abs(y2 - y1)
-    if (length > longestSegment) {
-      longestSegment = length
-      labelPoint = [(x1 + x2) / 2, (y1 + y2) / 2]
-    }
-  }
-
-  return { path, labelX: labelPoint[0], labelY: labelPoint[1] }
-}
-
 type UmlEdgeData = {
   tipoRelacion?: TipoRelacionUML
   multiplicidadOrigen?: string | null
   multiplicidadDestino?: string | null
-  routePoints?: Array<{ x: number; y: number }> | null
-  routeLabelPoint?: { x: number; y: number } | null
 }
 
-function UmlDiamondMarker({ x, y, filled, color }: { x: number; y: number; filled: boolean; color: string }) {
+function UmlDiamondMarker({ x, y, filled, color, angle }: { x: number; y: number; filled: boolean; color: string; angle: number }) {
   return (
     <EdgeLabelRenderer>
       <span
@@ -201,8 +148,8 @@ function UmlDiamondMarker({ x, y, filled, color }: { x: number; y: number; fille
           top: y,
           width: 12,
           height: 12,
-          transform: 'translate(-50%, -50%) rotate(45deg)',
-          background: filled ? color : '#0d121b',
+          transform: `translate(-50%, -50%) rotate(${angle + 45}deg)`,
+          background: filled ? color : '#f4eddd',
           border: `2px solid ${color}`,
           boxSizing: 'border-box',
           pointerEvents: 'none',
@@ -213,16 +160,16 @@ function UmlDiamondMarker({ x, y, filled, color }: { x: number; y: number; fille
   )
 }
 
-function UmlOrthogonalEdge(props: EdgeProps) {
-  const relationType = (props.data as UmlEdgeData | undefined)?.tipoRelacion
-  const isComposition = relationType === 'COMPOSICION'
-  const color = typeof props.style?.stroke === 'string' ? props.style.stroke : '#475569'
-
+function UmlInheritanceMarker({ x, y, angle, color }: { x: number; y: number; angle: number; color: string }) {
+  const radians = angle * Math.PI / 180
+  const centerX = x - Math.cos(radians) * 10
+  const centerY = y - Math.sin(radians) * 10
   return (
-    <>
-      <StepEdge {...props} markerStart={undefined} markerEnd={undefined} />
-      <UmlDiamondMarker x={props.sourceX} y={props.sourceY} filled={isComposition} color={color} />
-    </>
+    <EdgeLabelRenderer>
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 20 20" style={{ position: 'absolute', left: centerX, top: centerY, transform: `translate(-50%, -50%) rotate(${angle}deg)`, overflow: 'visible', pointerEvents: 'none', zIndex: 2 }}>
+        <path d="M 20 10 L 1 1 L 1 19 Z" fill="#f4eddd" stroke={color} strokeWidth="1.8" strokeLinejoin="round" />
+      </svg>
+    </EdgeLabelRenderer>
   )
 }
 
@@ -244,15 +191,17 @@ function UmlStraightEdge(props: EdgeProps) {
   const color = typeof props.style?.stroke === 'string' ? props.style.stroke : '#94a3b8'
   const isAggregation = data?.tipoRelacion === 'AGREGACION'
   const isComposition = data?.tipoRelacion === 'COMPOSICION'
+  const isInheritance = data?.tipoRelacion === 'HERENCIA'
+  const edgeAngle = Math.atan2(dy, dx) * 180 / Math.PI
 
   return (
     <>
       <BaseEdge
         path={`M ${props.sourceX} ${props.sourceY} L ${props.targetX} ${props.targetY}`}
         markerStart={props.markerStart}
-        markerEnd={props.markerEnd}
+        markerEnd={isInheritance ? undefined : props.markerEnd}
         style={props.style}
-        className="uml-straight-path"
+        className={props.animated ? 'uml-straight-path animated' : 'uml-straight-path'}
         interactionWidth={props.interactionWidth}
       />
       <EdgeLabelRenderer>
@@ -273,8 +222,9 @@ function UmlStraightEdge(props: EdgeProps) {
         )}
       </EdgeLabelRenderer>
       {(isAggregation || isComposition) && (
-        <UmlDiamondMarker x={props.sourceX} y={props.sourceY} filled={isComposition} color={color} />
+        <UmlDiamondMarker x={props.sourceX} y={props.sourceY} filled={isComposition} color={color} angle={edgeAngle} />
       )}
+      {isInheritance && <UmlInheritanceMarker x={props.targetX} y={props.targetY} angle={edgeAngle} color="#111318" />}
     </>
   )
 }
@@ -284,95 +234,7 @@ function formatUmlMultiplicity(value: string) {
   return normalized === '1..1' ? '1' : normalized
 }
 
-function UmlRoutedEdge(props: EdgeProps) {
-  const data = props.data as UmlEdgeData | undefined
-  const route = data?.routePoints
-  if (!route || route.length < 2) return data?.tipoRelacion === 'AGREGACION' || data?.tipoRelacion === 'COMPOSICION'
-    ? <UmlOrthogonalEdge {...props} />
-    : <StepEdge {...props} />
-  let points = route.map(point => ({ ...point }))
-  points[0] = { x: props.sourceX, y: props.sourceY }
-  points[points.length - 1] = { x: props.targetX, y: props.targetY }
-  if (points.length > 2) {
-    const first = points[1]
-    const sourceStub = props.sourcePosition === Position.Left || props.sourcePosition === Position.Right
-      ? { x: first.x, y: props.sourceY }
-      : { x: props.sourceX, y: first.y }
-    const last = points[points.length - 2]
-    const targetStub = props.targetPosition === Position.Left || props.targetPosition === Position.Right
-      ? { x: last.x, y: props.targetY }
-      : { x: props.targetX, y: last.y }
-    points = [points[0], sourceStub, ...points.slice(1, -1), targetStub, points.at(-1)!]
-  }
-  const path = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')
-  const labelPoint = data?.routeLabelPoint ?? points[Math.floor((points.length - 1) / 2)]
-  const color = typeof props.style?.stroke === 'string' ? props.style.stroke : '#475569'
-  return <>
-    <BaseEdge path={path} markerStart={props.markerStart} markerEnd={props.markerEnd} style={props.style} className={props.animated ? 'animated' : undefined} interactionWidth={props.interactionWidth} />
-    {props.label && <EdgeLabelRenderer><div className="react-flow__edge-text" style={{ position: 'absolute', transform: `translate(-50%, -50%) translate(${labelPoint.x}px,${labelPoint.y}px)`, pointerEvents: 'all' }}>{props.label}</div></EdgeLabelRenderer>}
-    {(data?.tipoRelacion === 'AGREGACION' || data?.tipoRelacion === 'COMPOSICION') && <UmlDiamondMarker x={props.sourceX} y={props.sourceY} filled={data.tipoRelacion === 'COMPOSICION'} color={color} />}
-  </>
-}
-
-function ReflexiveOrthogonalEdge({
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
-  sourcePosition,
-  targetPosition,
-  label,
-  markerStart,
-  markerEnd,
-  style,
-  animated,
-  interactionWidth,
-  data
-}: EdgeProps) {
-  const { path, labelX, labelY } = buildReflexiveOrthogonalPath(
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition
-  )
-
-  return (
-    <>
-      <BaseEdge
-        path={path}
-        markerStart={markerStart}
-        markerEnd={markerEnd}
-        style={style}
-        className={animated ? 'animated' : undefined}
-        interactionWidth={interactionWidth}
-      />
-      {label && (
-        <EdgeLabelRenderer>
-          <div
-            className="react-flow__edge-text"
-            style={{
-              position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-              pointerEvents: 'all'
-            }}
-          >
-            {label}
-          </div>
-        </EdgeLabelRenderer>
-      )}
-      {(data as UmlEdgeData | undefined)?.tipoRelacion === 'AGREGACION' && (
-        <UmlDiamondMarker x={sourceX} y={sourceY} filled={false} color={typeof style?.stroke === 'string' ? style.stroke : '#0284c7'} />
-      )}
-      {(data as UmlEdgeData | undefined)?.tipoRelacion === 'COMPOSICION' && (
-        <UmlDiamondMarker x={sourceX} y={sourceY} filled color={typeof style?.stroke === 'string' ? style.stroke : '#1e293b'} />
-      )}
-    </>
-  )
-}
-
-const EDGE_TYPES = { umlReflexive: ReflexiveOrthogonalEdge, umlOrthogonal: UmlOrthogonalEdge, umlRouted: UmlRoutedEdge, umlStraight: UmlStraightEdge }
+const EDGE_TYPES = { umlStraight: UmlStraightEdge }
 
 interface ApiResponse<T> {
   data: T
@@ -1057,9 +919,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
         id: rel.id,
         source: rel.elementoOrigen,
         target: rel.elementoDestino,
-        type: isReflexive
-          ? 'umlReflexive'
-          : 'umlStraight',
+        type: 'umlStraight',
         sourcePosition: positionFromRelationHandle(sourceHandle, sourcePosition),
         targetPosition: positionFromRelationHandle(targetHandle, targetPosition),
         sourceHandle,
@@ -1069,18 +929,17 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           multiplicidadOrigen: rel.multiplicidadOrigen,
           multiplicidadDestino: rel.multiplicidadDestino
         },
-        pathOptions: { offset: 18, stepPosition: 0.5 },
         label: label || undefined,
         animated: isDependency,
         style: {
-          stroke: '#aeb9ca',
-          strokeWidth: 1.6,
+          stroke: '#111318',
+          strokeWidth: 1.8,
           strokeDasharray: isDependency ? '5,5' : undefined
         },
         markerEnd: isHeritage
           ? { type: MarkerType.ArrowClosed, color: '#c4cde0', width: 22, height: 22 }
           : isDependency
-          ? { type: MarkerType.Arrow, color: '#c4cde0' }
+          ? { type: MarkerType.Arrow, color: '#111318' }
           : undefined,
         markerStart: undefined
       }
@@ -2274,11 +2133,6 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
   const handleFlowNodesChange = useCallback((changes: NodeChange<UmlNodeType>[]) => {
     if (!historicalView) {
       onNodesChange(changes)
-      if (changes.some(change => change.type === 'position' && change.dragging)) {
-        setEdges(current => current.some(edge => edge.type === 'umlRouted')
-          ? current.map(edge => edge.type === 'umlRouted' ? { ...edge, type: edge.source === edge.target ? 'umlReflexive' : 'umlStraight', data: { ...(edge.data || {}), routePoints: null, routeLabelPoint: null } } : edge)
-          : current)
-      }
       return
     }
     // En modo histórico solo aceptamos mediciones de React Flow para renderizar nodos y aristas.
@@ -2293,7 +2147,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
       })
       onNodesChange(dimensions)
     }
-  }, [historicalView, onNodesChange, setEdges])
+  }, [historicalView, onNodesChange])
 
   async function returnToCurrentVersion() {
     if (!diagram) return
@@ -2359,11 +2213,6 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     })
     if (!movedNodes.length) return
 
-    const routeNodes = nextNodes.map(node => ({ id: node.id, x: node.position.x, y: node.position.y, width: node.measured?.width ?? node.width ?? 240, height: node.measured?.height ?? node.height ?? 120 }))
-    const routeResults = routeUmlEdges(routeNodes, edges.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, label: typeof edge.label === 'string' ? edge.label : '' })))
-    const routedMetrics = measureRoutedLayout(routeNodes, routeResults)
-    if (routedMetrics.nodeOverlaps > 0 || routedMetrics.edgeThroughNodes > 0) console.warn('CU22 routing metrics', routedMetrics)
-
     setArrangingDiagram(true)
     setSavingStatus('Organizando diagrama...')
     setNodes(current => current.map(node => {
@@ -2372,11 +2221,6 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     }))
     try {
       await handleNodeDragStop(null, movedNodes[0], movedNodes)
-      setEdges(current => current.map(edge => ({
-        ...edge,
-        type: edge.source === edge.target ? 'umlReflexive' : 'umlStraight',
-        data: { ...(edge.data || {}), routePoints: null, routeLabelPoint: null }
-      })))
       window.setTimeout(() => {
         void flowInstance.current?.fitView({ nodes: nextNodes.map(node => ({ id: node.id })), padding: 0.24, maxZoom: 1.05, duration: 320 })
       }, 120)
@@ -2385,7 +2229,7 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
     } finally {
       setArrangingDiagram(false)
     }
-  }, [isReadOnly, historicalView, canvasProposal.active, arrangingDiagram, diagram, edges, handleNodeDragStop, setNodes, setEdges, onError])
+  }, [isReadOnly, historicalView, canvasProposal.active, arrangingDiagram, diagram, edges, handleNodeDragStop, setNodes, onError])
   const selectedNodeId = nodes.find((node) => node.selected)?.id
   const selectedEdgeId = edges.find((edge) => edge.selected)?.id
   const selectedElement = selectedNodeId ? elementsRaw.find((element) => element.id === selectedNodeId) ?? null : null
@@ -2717,6 +2561,8 @@ export function UmlCanvas({ project, auth, onError, members = [], onManageMember
           onPaneClick={undefined}
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
+          connectionLineType={ConnectionLineType.Straight}
+          connectionLineStyle={{ stroke: '#111318', strokeWidth: 1.8, filter: 'drop-shadow(0 0 1px #d7e0eb)' }}
           nodesDraggable={!isReadOnly && !canvasProposal.active}
           nodesConnectable={!isReadOnly && !historicalView && !canvasProposal.active}
           edgesReconnectable={!isReadOnly && !historicalView && !canvasProposal.active}
